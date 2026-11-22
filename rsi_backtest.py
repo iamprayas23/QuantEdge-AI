@@ -1,68 +1,57 @@
-import pandas as pd
-import numpy as np
+#!/usr/bin/env python3
+"""RSI Mean Reversion Backtest Runner (Causal Zero-Lookahead Engine)"""
+from core.execution.cost_model import CostModel
+from core.backtesting.engine import BacktestEngine
 
-# ---------------------------
-# Load Data
-# ---------------------------
 
-df = pd.read_csv("data/XAUUSD_1H_merged.csv")
-df["timestamp"] = pd.to_datetime(df["timestamp"])
-df.set_index("timestamp", inplace=True)
+def main():
+    print("========== Initializing QuantEdge Deterministic RSI Backtest ==========")
+    cost_model = CostModel(
+        slippage_bps=1.0,
+        commission_per_trade=1.0,
+        spread_pips=0.2,
+    )
 
-# ---------------------------
-# RSI Calculation
-# ---------------------------
+    engine = BacktestEngine(
+        cost_model=cost_model,
+        initial_capital=10000.0,
+        risk_per_trade_pct=0.01,
+        symbol="XAUUSD",
+        timeframe="1H",
+    )
 
-window = 14
+    result = engine.run(
+        strategy_type="rsi",
+        data="data/XAUUSD_1H_merged.csv",
+        params={
+            "rsi_period": 14,
+            "oversold": 30.0,
+            "overbought": 70.0,
+            "risk_per_trade_pct": 0.01,
+            "risk_reward_ratio": 2.0,
+            "atr_period": 14,
+            "sl_atr_mult": 1.5,
+            "max_bars_held": 48,
+        },
+    )
 
-delta = df["close"].diff()
+    m = result.metrics
+    print("\n========== RSI Strategy Institutional Results ==========")
+    print(f"Initial Capital : ${m['initial_capital']:,.2f}")
+    print(f"Final Equity    : ${m['final_equity']:,.2f}")
+    print(f"Total Return    : {m['total_return']:+.2f}%")
+    print(f"Annualized CAGR : {m['cagr']:+.2f}%")
+    print(f"Sharpe Ratio    : {m['sharpe_ratio']:.2f}")
+    print(f"Sortino Ratio   : {m['sortino_ratio']:.2f}")
+    print(f"Calmar Ratio    : {m['calmar_ratio']:.2f}")
+    print(f"Max Drawdown    : -{m['max_drawdown']:.2f}% (${m['max_drawdown_dollars']:,.2f})")
+    print(f"Max DD Duration : {m['max_drawdown_duration_bars']} bars")
+    print(f"Total Trades    : {m['total_trades']} ({m['winning_trades']}W / {m['losing_trades']}L)")
+    print(f"Win Rate        : {m['win_rate']:.2f}%")
+    print(f"Profit Factor   : {m['profit_factor']:.2f}")
+    print(f"Avg Win / Loss  : ${m['avg_win']:.2f} / ${m['avg_loss']:.2f} (Payoff: {m['payoff_ratio']:.2f})")
+    print(f"Total Costs     : ${m['total_commission'] + m['total_slippage']:,.2f} (Comm: ${m['total_commission']:,.2f}, Slip: ${m['total_slippage']:,.2f})")
 
-gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
 
-rs = gain / loss
-df["rsi"] = 100 - (100 / (1 + rs))
-
-# ---------------------------
-# Strategy Logic
-# ---------------------------
-
-df["signal"] = 0
-df.loc[df["rsi"] < 30, "signal"] = 1     # Buy
-df.loc[df["rsi"] > 70, "signal"] = -1    # Sell
-
-df["position"] = df["signal"].shift()
-
-# ---------------------------
-# Returns
-# ---------------------------
-
-df["returns"] = df["close"].pct_change()
-df["strategy_returns"] = df["position"] * df["returns"]
-
-# ---------------------------
-# Performance Metrics
-# ---------------------------
-
-df["equity_curve"] = (1 + df["strategy_returns"]).cumprod()
-
-total_return = df["equity_curve"].iloc[-1] - 1
-
-# Sharpe ratio
-sharpe = (
-    df["strategy_returns"].mean() /
-    df["strategy_returns"].std()
-) * np.sqrt(252 * 24)
-
-# Max Drawdown
-rolling_max = df["equity_curve"].cummax()
-drawdown = df["equity_curve"] / rolling_max - 1
-max_drawdown = drawdown.min()
-
-win_rate = (df["strategy_returns"] > 0).sum() / len(df)
-
-print("========== RSI Strategy Results ==========")
-print(f"Total Return: {total_return:.2%}")
-print(f"Sharpe Ratio: {sharpe:.2f}")
-print(f"Max Drawdown: {max_drawdown:.2%}")
-print(f"Win Rate: {win_rate:.2%}")
+if __name__ == "__main__":
+    main()

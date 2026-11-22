@@ -1,0 +1,131 @@
+version: "3.8"
+
+services:
+  # =========================================================================
+  # 1. PostgreSQL Database with Healthcheck
+  # =========================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: quantedge_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: quantedge
+      POSTGRES_USER: quant
+      POSTGRES_PASSWORD: quantpass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quant -d quantedge"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # =========================================================================
+  # 2. Redis Message Broker & Worker Queue
+  # =========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: quantedge_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # =========================================================================
+  # 3. FastAPI Backend Service
+  # =========================================================================
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: quantedge_backend
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql://quant:quantpass@postgres:5432/quantedge
+      - REDIS_URL=redis://redis:6379/0
+      - USE_IN_MEMORY_QUEUE=false
+      - LLM_PROVIDER=ollama
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_MODEL=qwen2.5:7b
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head &&
+             python infrastructure/database/ingest_data.py --source data/XAUUSD_1H_merged.csv &&
+             uvicorn main:app --host 0.0.0.0 --port 8000"
+
+  # =========================================================================
+  # 4. Asynchronous Queue Worker Service
+  # =========================================================================
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: quantedge_worker
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql://quant:quantpass@postgres:5432/quantedge
+      - REDIS_URL=redis://redis:6379/0
+      - USE_IN_MEMORY_QUEUE=false
+      - LLM_PROVIDER=ollama
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_MODEL=qwen2.5:7b
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    command: python api_platform/worker_daemon.py
+
+  # =========================================================================
+  # 5. Next.js Frontend Research Workspace
+  # =========================================================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: quantedge_frontend
+    restart: unless-stopped
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+  # =========================================================================
+  # 6. Optional Local Ollama Container (Run with --profile ai)
+  # =========================================================================
+  ollama:
+    image: ollama/ollama:latest
+    container_name: quantedge_ollama
+    profiles:
+      - ai
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+
+volumes:
+  postgres_data:
+  redis_data:
+  ollama_models:

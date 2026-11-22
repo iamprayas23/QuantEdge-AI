@@ -1,10 +1,12 @@
 """Database Connection and Session Management"""
 import os
+import logging
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from dotenv import load_dotenv
 
 load_dotenv()
+logger = logging.getLogger("quantedge.database")
 
 
 def get_database_url() -> str:
@@ -18,12 +20,27 @@ def create_db_engine(url: str = None):
             db_url,
             connect_args={"check_same_thread": False},
         )
-    return create_engine(
-        db_url,
-        pool_pre_ping=True,
-        pool_size=10,
-        max_overflow=20,
-    )
+
+    # For PostgreSQL, verify connection; if offline, fallback to SQLite
+    try:
+        test_engine = create_engine(
+            db_url,
+            pool_pre_ping=True,
+            connect_args={"connect_timeout": 2},
+        )
+        with test_engine.connect():
+            pass
+        return test_engine
+    except Exception as e:
+        fallback_url = "sqlite:///./quantedge.db"
+        logger.warning(
+            f"Could not connect to PostgreSQL at {db_url} ({e}). "
+            f"Falling back to local SQLite database at {fallback_url}"
+        )
+        return create_engine(
+            fallback_url,
+            connect_args={"check_same_thread": False},
+        )
 
 
 engine = create_db_engine()

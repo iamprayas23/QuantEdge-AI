@@ -36,6 +36,43 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.on_event("startup")
+def on_startup():
+    from infrastructure.database.connection import SessionLocal
+    from api_platform.auth.service import create_user_with_workspace
+    from api_platform.strategies.service import create_strategy
+    from infrastructure.database.models import User, Strategy
+
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.email == "trader@quantedge.io").first()
+        if not user:
+            res = create_user_with_workspace(db, "trader@quantedge.io", "QuantPassword123!", "Alpha Quant Labs")
+            if res:
+                u, ws = res
+                create_strategy(
+                    db,
+                    ws.id,
+                    u.id,
+                    "Gold RSI Mean Reversion",
+                    "Institutional 1H mean-reversion with volatility ATR stops",
+                    "rsi",
+                )
+                create_strategy(
+                    db,
+                    ws.id,
+                    u.id,
+                    "XAUUSD Divergence Causal",
+                    "Strictly causal regular divergence with ATR risk management",
+                    "divergence",
+                )
+    except Exception as err:
+        print(f"Startup seed notice: {err}")
+    finally:
+        db.close()
+
+
 # Mount Routers
 app.include_router(auth_router)
 app.include_router(strategy_router)
