@@ -16,6 +16,7 @@ import { EquityChart } from "@/components/EquityChart";
 import { TradeBlotter } from "@/components/TradeBlotter";
 import { StrategyLab } from "@/components/StrategyLab";
 import { AICritiquePanel } from "@/components/AICritiquePanel";
+import { CommitteePanel } from "@/components/CommitteePanel";
 import { Activity, ShieldCheck, Database, Terminal, RefreshCw } from "lucide-react";
 
 export default function QuantEdgeApp() {
@@ -129,7 +130,7 @@ export default function QuantEdgeApp() {
         strategy_version_id: launchConfig.versionId,
         symbol: launchConfig.symbol,
         timeframe: launchConfig.timeframe,
-        initialCapital: launchConfig.initialCapital,
+        initial_capital: launchConfig.initialCapital,
         slippage_bps: launchConfig.slippageBps,
         commission_per_trade: launchConfig.commission,
         spread_pips: launchConfig.spreadPips,
@@ -183,6 +184,22 @@ export default function QuantEdgeApp() {
       throw new Error("No completed backtest run selected to critique");
     }
     return await api.critiqueBacktest(activeTearsheet.run.id);
+  };
+
+  // Multi-Agent Committee
+  const handleConveneCommittee = async (params: {
+    symbol: string;
+    timeframe: string;
+    strategyVersionId?: string;
+    backtestRunId?: string;
+  }) => {
+    return await api.conveneCommittee({
+      symbol: params.symbol,
+      timeframe: params.timeframe,
+      strategy_version_id: params.strategyVersionId,
+      backtest_run_id: params.backtestRunId,
+      limit_bars: 300,
+    });
   };
 
   return (
@@ -263,6 +280,14 @@ export default function QuantEdgeApp() {
             />
           </div>
         </div>
+
+        {/* Multi-Agent Quantitative Committee Panel */}
+        <CommitteePanel
+          onApplyProposal={(p) => setAppliedParams(p)}
+          onConveneCommittee={handleConveneCommittee}
+          selectedStrategy={selectedStrategy}
+          activeRun={activeTearsheet?.run || null}
+        />
 
         {/* Bottom: Trade Blotter */}
         <TradeBlotter trades={activeTearsheet?.recent_trades || []} />

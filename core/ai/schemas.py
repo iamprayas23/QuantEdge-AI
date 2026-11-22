@@ -1,8 +1,9 @@
-"""Pydantic Schemas for Grounded AI Layer
+"""Pydantic Schemas for Grounded AI Layer & Multi-Agent Committee
 
 Enforces strict typed contracts, zero hallucinations, explicit risk disclosures,
-and concrete numerical grounding.
+concrete numerical grounding, and human-in-the-loop confirmation.
 """
+from datetime import datetime
 from typing import Dict, Any, List, Optional, Literal
 from pydantic import BaseModel, Field
 
@@ -78,4 +79,56 @@ class BacktestCritiqueOutput(BaseModel):
     disclaimer: str = Field(
         default="Grounded critique is algorithmic and factual. It does not provide financial or investment advice.",
         description="Compliance notice"
+    )
+
+
+# =========================================================================
+# 3. Multi-Agent Committee & Specialized Role Contracts
+# =========================================================================
+
+class AnalystSignal(BaseModel):
+    agent_name: str = Field(..., description="Name of the analyst agent (e.g. 'technicals', 'regime')")
+    signal: Literal["BULLISH", "BEARISH", "NEUTRAL"] = Field(..., description="Directional stance")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score between 0.0 and 1.0")
+    rationale: str = Field(..., description="Grounded qualitative and quantitative explanation")
+    metrics_grounding: Dict[str, Any] = Field(default_factory=dict, description="Verifiable metrics cited directly from market data or backtest")
+    suggested_adjustments: Optional[Dict[str, Any]] = Field(default=None, description="Optional parameter adjustment proposals")
+
+
+class RiskAssessment(BaseModel):
+    max_risk_per_trade_pct: float = Field(..., description="Maximum prudent risk per trade percentage")
+    max_drawdown_limit_pct: float = Field(default=20.0, description="Drawdown risk threshold")
+    allowed_action: Literal["PERMIT", "RESTRICT", "HALT"] = Field(..., description="Risk manager authorization gate")
+    volatility_assessment: str = Field(..., description="Current volatility regime impact")
+    risk_warnings: List[str] = Field(default_factory=list, description="Identified tail-risk or sample-size warnings")
+    rationale: str = Field(..., description="Risk manager rationale citing exact numbers")
+
+
+class PortfolioProposal(BaseModel):
+    target_action: Literal["BUY", "SELL", "HOLD"] = Field(..., description="Recommended portfolio decision")
+    recommended_parameters: Dict[str, Any] = Field(default_factory=dict, description="Synthesized strategy parameters")
+    target_allocation_pct: float = Field(default=100.0, ge=0.0, le=100.0, description="Capital allocation percentage")
+    risk_per_trade_pct: float = Field(default=0.01, ge=0.0, le=0.05, description="Recommended risk per trade")
+    stop_loss_atr_mult: float = Field(default=1.5, description="Recommended SL ATR multiple")
+    take_profit_atr_mult: float = Field(default=3.0, description="Recommended TP ATR multiple")
+    execution_urgency: Literal["PATIENT", "NORMAL", "IMMEDIATE"] = Field(default="NORMAL", description="Execution stance")
+    reasoning: str = Field(..., description="CIO synthesis and resolution of conflicting analyst votes")
+    human_confirmation_required: bool = Field(default=True, description="Strict human-in-the-loop requirement before applying changes")
+
+
+class CommitteeReviewOutput(BaseModel):
+    id: str = Field(..., description="Unique ID for this committee report")
+    symbol: str = Field(default="XAUUSD", description="Asset symbol evaluated")
+    timeframe: str = Field(default="1H", description="Timeframe evaluated")
+    as_of_ts: str = Field(..., description="Timestamp of evaluation")
+    strategy_version_id: Optional[str] = Field(None, description="Linked strategy version ID if provided")
+    backtest_run_id: Optional[str] = Field(None, description="Linked backtest run ID if provided")
+    analyst_signals: Dict[str, AnalystSignal] = Field(..., description="Individual analyst outputs")
+    risk_assessment: RiskAssessment = Field(..., description="Independent risk manager audit")
+    portfolio_proposal: PortfolioProposal = Field(..., description="Final CIO portfolio manager decision")
+    executive_summary: str = Field(..., description="High-level committee consensus summary")
+    human_confirmation_required: bool = Field(default=True, description="Enforced human sign-off flag")
+    disclaimer: str = Field(
+        default="Multi-agent committee outputs are algorithmic research aids. They do not constitute financial advice or automated execution.",
+        description="Quantitative compliance disclosure"
     )

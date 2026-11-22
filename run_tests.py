@@ -12,7 +12,7 @@ os.environ["DATABASE_URL"] = "sqlite:///./test_quantedge_suite.db"
 os.environ["USE_IN_MEMORY_QUEUE"] = "true"
 sys.path.insert(0, os.path.abspath("."))
 
-from infrastructure.database.models import Base
+from infrastructure.database.models import Base, CommitteeReport
 from infrastructure.database.connection import engine, SessionLocal
 from core.execution.cost_model import CostModel
 from core.risk.position_sizer import calculate_position_size
@@ -20,9 +20,24 @@ from core.portfolio.state import TradeRecord, EquityPoint
 from core.backtesting.metrics import calculate_comprehensive_metrics
 from core.backtesting.signals import compute_rsi, compute_atr, detect_causal_pivots
 from core.backtesting.engine import BacktestEngine
-from core.ai.schemas import StrategySpecOutput, BacktestCritiqueOutput
+from core.ai.schemas import (
+    StrategySpecOutput,
+    BacktestCritiqueOutput,
+    AnalystSignal,
+    RiskAssessment,
+    PortfolioProposal,
+    CommitteeReviewOutput,
+)
 from core.ai.hypothesis_assistant import parse_hypothesis_to_spec
 from core.ai.backtest_critique import critique_backtest_run
+from core.agents import (
+    AgentState,
+    CommitteeOrchestrator,
+    TechnicalsAgent,
+    RegimeAgent,
+    RiskAgent,
+    PortfolioManagerAgent,
+)
 
 # API layer functions
 import api_platform.auth.schemas as auth_schemas
@@ -172,12 +187,6 @@ class TestAPIPlatformServices(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.db.close()
-        Base.metadata.drop_all(bind=engine)
-        if os.path.exists("./test_quantedge_suite.db"):
-            try:
-                os.remove("./test_quantedge_suite.db")
-            except Exception:
-                pass
 
     def test_full_service_and_data_workflow(self):
         db = self.db
@@ -307,6 +316,208 @@ class TestAPIPlatformServices(unittest.TestCase):
         usage_summary = bill_service.get_workspace_usage_summary(db, workspace.id)
         self.assertGreaterEqual(usage_summary["total_records"], 1)
         self.assertGreater(usage_summary["total_compute_seconds"], 0.0)
+
+
+class TestMultiAgentCommittee(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        Base.metadata.create_all(bind=engine)
+        cls.db = SessionLocal()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.db.close()
+
+    def test_technicals_agent_deterministic_signal(self):
+        agent = TechnicalsAgent()
+        market_summary_bull = {
+            "last_close": 2050.0,
+            "ema50": 2020.0,
+            "ema200": 2000.0,
+            "rsi14": 58.0,
+            "atr14": 12.5,
+        }
+        res_bull = agent.evaluate("XAUUSD", market_summary_bull)
+        self.assertIsInstance(res_bull, AnalystSignal)
+        self.assertEqual(res_bull.signal, "BULLISH")
+        self.assertGreaterEqual(res_bull.confidence, 0.5)
+        self.assertEqual(res_bull.metrics_grounding["last_close"], 2050.0)
+
+        market_summary_bear = {
+            "last_close": 1950.0,
+            "ema50": 1980.0,
+            "ema200": 2000.0,
+            "rsi14": 75.0,
+            "atr14": 15.0,
+        }
+        res_bear = agent.evaluate("XAUUSD", market_summary_bear)
+        self.assertEqual(res_bear.signal, "BEARISH")
+        self.assertIn("bearish", res_bear.rationale.lower())
+
+    def test_regime_agent_deterministic_signal(self):
+        agent = RegimeAgent()
+        regime_data_bull = {
+            "vol_regime": "medium_vol",
+            "trend_regime": "trending_bull",
+            "realized_vol_pct": 14.5,
+        }
+        res_bull = agent.evaluate("XAUUSD", regime_data_bull)
+        self.assertIsInstance(res_bull, AnalystSignal)
+        self.assertEqual(res_bull.signal, "BULLISH")
+        self.assertEqual(res_bull.metrics_grounding["vol_regime"], "medium_vol")
+
+        regime_data_ranging = {
+            "vol_regime": "low_vol",
+            "trend_regime": "ranging",
+            "realized_vol_pct": 8.5,
+        }
+        res_ranging = agent.evaluate("XAUUSD", regime_data_ranging)
+        self.assertEqual(res_ranging.signal, "NEUTRAL")
+
+    def test_risk_agent_guardrails_and_limits(self):
+        agent = RiskAgent()
+        market_summary = {"last_close": 2000.0}
+        regime_data = {"vol_regime": "high_vol", "realized_vol_pct": 24.0}
+
+        # Severe drawdown scenario (> 25%)
+        backtest_severe = {
+            "max_drawdown": 28.5,
+            "total_trades": 18,
+            "profit_factor": 1.2,
+        }
+        risk_out = agent.evaluate("XAUUSD", market_summary, regime_data, backtest_severe)
+        self.assertIsInstance(risk_out, RiskAssessment)
+        self.assertEqual(risk_out.allowed_action, "RESTRICT")
+        self.assertLessEqual(risk_out.max_risk_per_trade_pct, 0.005)
+        self.assertTrue(any("Sample size warning" in w for w in risk_out.risk_warnings))
+        self.assertTrue(any("Severe historical drawdown" in w for w in risk_out.risk_warnings))
+
+        # Safe scenario
+        backtest_safe = {
+            "max_drawdown": 8.5,
+            "total_trades": 55,
+            "profit_factor": 1.75,
+        }
+        regime_safe = {"vol_regime": "medium_vol", "realized_vol_pct": 12.0}
+        risk_safe = agent.evaluate("XAUUSD", market_summary, regime_safe, backtest_safe)
+        self.assertEqual(risk_safe.allowed_action, "PERMIT")
+        self.assertEqual(risk_safe.max_risk_per_trade_pct, 0.01)
+
+    def test_portfolio_manager_synthesis(self):
+        agent = PortfolioManagerAgent()
+        tech = AnalystSignal(
+            agent_name="technicals",
+            signal="BULLISH",
+            confidence=0.8,
+            rationale="Strong trend",
+            metrics_grounding={"last_close": 2050.0},
+        )
+        reg = AnalystSignal(
+            agent_name="regime",
+            signal="BULLISH",
+            confidence=0.75,
+            rationale="Trending bull",
+            metrics_grounding={"vol_regime": "medium_vol"},
+        )
+        risk = RiskAssessment(
+            max_risk_per_trade_pct=0.01,
+            max_drawdown_limit_pct=20.0,
+            allowed_action="PERMIT",
+            volatility_assessment="Medium Vol",
+            risk_warnings=[],
+            rationale="Risk parameters validated",
+        )
+
+        proposal = agent.evaluate("XAUUSD", tech, reg, risk)
+        self.assertIsInstance(proposal, PortfolioProposal)
+        self.assertEqual(proposal.target_action, "BUY")
+        self.assertEqual(proposal.target_allocation_pct, 100.0)
+        self.assertTrue(proposal.human_confirmation_required)
+
+        # Test Halt condition overrides analyst bullishness
+        risk_halt = RiskAssessment(
+            max_risk_per_trade_pct=0.0,
+            max_drawdown_limit_pct=20.0,
+            allowed_action="HALT",
+            volatility_assessment="Extreme Vol",
+            risk_warnings=["Severe loss"],
+            rationale="Halt trading",
+        )
+        proposal_halt = agent.evaluate("XAUUSD", tech, reg, risk_halt)
+        self.assertEqual(proposal_halt.target_action, "HOLD")
+        self.assertEqual(proposal_halt.target_allocation_pct, 0.0)
+
+    def test_orchestrator_end_to_end(self):
+        dates = pd.date_range("2024-01-01", periods=60, freq="h")
+        df = pd.DataFrame({
+            "timestamp": dates,
+            "open": [2000.0 + i for i in range(60)],
+            "high": [2005.0 + i for i in range(60)],
+            "low": [1995.0 + i for i in range(60)],
+            "close": [2002.0 + i for i in range(60)],
+            "volume": [1000.0] * 60,
+        })
+
+        orchestrator = CommitteeOrchestrator()
+        review = orchestrator.run(
+            symbol="XAUUSD",
+            timeframe="1H",
+            ohlcv_df=df,
+            backtest_metrics={"max_drawdown": 10.0, "total_trades": 45, "profit_factor": 1.6},
+            strategy_params={"rsi_period": 14, "oversold": 30.0},
+        )
+
+        self.assertIsInstance(review, CommitteeReviewOutput)
+        self.assertIn("technicals", review.analyst_signals)
+        self.assertIn("regime", review.analyst_signals)
+        self.assertIsNotNone(review.risk_assessment)
+        self.assertIsNotNone(review.portfolio_proposal)
+        self.assertTrue(review.human_confirmation_required)
+        self.assertGreater(len(review.executive_summary), 20)
+
+    def test_committee_api_endpoint_and_db_persistence(self):
+        # 1. Setup user & workspace
+        email = f"committee_quant_{int(time.time())}@quantedge.io"
+        u, ws = auth_service.create_user_with_workspace(
+            self.db, email=email, password="Password123!", workspace_name="Committee Lab"
+        )
+
+        # 2. Invoke Committee Review endpoint handler
+        req = ai_router.CommitteeReviewRequest(
+            symbol="XAUUSD",
+            timeframe="1H",
+            limit_bars=60,
+        )
+        review_out = ai_router.convene_committee_review(
+            payload=req,
+            db=self.db,
+            current_user=u,
+            workspace=ws,
+        )
+
+        self.assertIsInstance(review_out, CommitteeReviewOutput)
+        self.assertEqual(review_out.symbol, "XAUUSD")
+        self.assertTrue(review_out.human_confirmation_required)
+
+        # 3. Verify Database Persistence of CommitteeReport
+        reports = ai_router.list_committee_reports(limit=10, db=self.db, workspace=ws)
+        self.assertGreaterEqual(len(reports), 1)
+        latest_summary = reports[0]
+        self.assertEqual(latest_summary.symbol, "XAUUSD")
+
+        # 4. Fetch full report by ID
+        from uuid import UUID
+        report_detail = ai_router.get_committee_report(
+            report_id=UUID(latest_summary.id),
+            db=self.db,
+            workspace=ws,
+        )
+        self.assertIn("analyst_signals", report_detail)
+        self.assertIn("portfolio_proposal", report_detail)
+
+        # 5. Verify usage was recorded
+        usage = bill_service.get_workspace_usage_summary(self.db, ws.id)
+        self.assertGreaterEqual(usage["total_records"], 1)
 
 
 if __name__ == "__main__":

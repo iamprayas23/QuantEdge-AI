@@ -111,6 +111,7 @@ class User(Base):
     strategies = relationship("Strategy", back_populates="user", cascade="all, delete")
     backtest_runs = relationship("BacktestRun", back_populates="user", cascade="all, delete")
     usage_records = relationship("UsageRecord", back_populates="user", cascade="all, delete")
+    committee_reports = relationship("CommitteeReport", back_populates="user", cascade="all, delete")
 
 
 class Workspace(Base):
@@ -129,6 +130,7 @@ class Workspace(Base):
     strategies = relationship("Strategy", back_populates="workspace", cascade="all, delete")
     backtest_runs = relationship("BacktestRun", back_populates="workspace", cascade="all, delete")
     usage_records = relationship("UsageRecord", back_populates="workspace", cascade="all, delete")
+    committee_reports = relationship("CommitteeReport", back_populates="workspace", cascade="all, delete")
 
 
 class UserWorkspace(Base):
@@ -342,3 +344,35 @@ class UsageRecord(Base):
 
     workspace = relationship("Workspace", back_populates="usage_records")
     user = relationship("User", back_populates="usage_records")
+
+
+# =========================================================================
+# 6. Multi-Agent Committee Evaluations & Reports
+# =========================================================================
+
+class CommitteeReport(Base):
+    __tablename__ = "committee_reports"
+
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(GUID(), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    strategy_version_id = Column(GUID(), ForeignKey("strategy_versions.id", ondelete="SET NULL"), nullable=True, index=True)
+    backtest_run_id = Column(GUID(), ForeignKey("backtest_runs.id", ondelete="SET NULL"), nullable=True, index=True)
+
+    symbol = Column(String(32), nullable=False, default="XAUUSD")
+    timeframe = Column(String(16), nullable=False, default="1H")
+    as_of_ts = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    executive_summary = Column(Text, nullable=False)
+    portfolio_action = Column(String(16), nullable=False)  # BUY, SELL, HOLD
+    overall_confidence = Column(Float, nullable=False, default=0.7)
+    human_confirmation_required = Column(Boolean, default=True, nullable=False)
+
+    report_json = Column(SafeJSON, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    workspace = relationship("Workspace", back_populates="committee_reports")
+    user = relationship("User", back_populates="committee_reports")
+    strategy_version = relationship("StrategyVersion")
+    backtest_run = relationship("BacktestRun")
+

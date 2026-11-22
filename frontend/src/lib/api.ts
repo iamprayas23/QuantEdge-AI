@@ -142,6 +142,25 @@ export const api = {
       method: "POST",
     }),
 
+  // Multi-Agent Committee
+  conveneCommittee: (payload: {
+    symbol?: string;
+    timeframe?: string;
+    strategy_version_id?: string;
+    backtest_run_id?: string;
+    limit_bars?: number;
+  }) =>
+    request<import("@/types").CommitteeReviewOutput>("/ai/committee-review", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  listCommitteeReports: (limit = 20) =>
+    request<import("@/types").CommitteeReportSummary[]>(`/ai/committee-reports?limit=${limit}`),
+
+  getCommitteeReport: (reportId: string) =>
+    request<import("@/types").CommitteeReviewOutput>(`/ai/committee-reports/${reportId}`),
+
   // Billing
   getUsage: () => request<any>("/billing/usage"),
 };

@@ -164,3 +164,60 @@ export interface OHLCVBar {
   close: number;
   volume: number;
 }
+
+export interface AnalystSignal {
+  agent_name: string;
+  signal: "BULLISH" | "BEARISH" | "NEUTRAL";
+  confidence: number;
+  rationale: string;
+  metrics_grounding: Record<string, any>;
+  suggested_adjustments?: Record<string, any>;
+}
+
+export interface RiskAssessment {
+  max_risk_per_trade_pct: number;
+  max_drawdown_limit_pct: number;
+  allowed_action: "PERMIT" | "RESTRICT" | "HALT";
+  volatility_assessment: string;
+  risk_warnings: string[];
+  rationale: string;
+}
+
+export interface PortfolioProposal {
+  target_action: "BUY" | "SELL" | "HOLD";
+  recommended_parameters: Record<string, any>;
+  target_allocation_pct: number;
+  risk_per_trade_pct: number;
+  stop_loss_atr_mult: number;
+  take_profit_atr_mult: number;
+  execution_urgency: "PATIENT" | "NORMAL" | "IMMEDIATE";
+  reasoning: string;
+  human_confirmation_required: boolean;
+}
+
+export interface CommitteeReviewOutput {
+  id: string;
+  symbol: string;
+  timeframe: string;
+  as_of_ts: string;
+  strategy_version_id?: string;
+  backtest_run_id?: string;
+  analyst_signals: Record<string, AnalystSignal>;
+  risk_assessment: RiskAssessment;
+  portfolio_proposal: PortfolioProposal;
+  executive_summary: string;
+  human_confirmation_required: boolean;
+  disclaimer: string;
+}
+
+export interface CommitteeReportSummary {
+  id: string;
+  symbol: string;
+  timeframe: string;
+  as_of_ts: string;
+  portfolio_action: string;
+  overall_confidence: number;
+  executive_summary: string;
+  created_at: string;
+}
+
