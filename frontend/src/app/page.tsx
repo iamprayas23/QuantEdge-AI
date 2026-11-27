@@ -17,7 +17,22 @@ import { TradeBlotter } from "@/components/TradeBlotter";
 import { StrategyLab } from "@/components/StrategyLab";
 import { AICritiquePanel } from "@/components/AICritiquePanel";
 import { CommitteePanel } from "@/components/CommitteePanel";
-import { Activity, ShieldCheck, Database, Terminal, RefreshCw } from "lucide-react";
+import { CatalystRegimeFeed } from "@/components/CatalystRegimeFeed";
+import { RiskGuardrailsPanel } from "@/components/RiskGuardrailsPanel";
+import { WalkForwardLab } from "@/components/WalkForwardLab";
+import { CashflowPlannerPanel } from "@/components/CashflowPlannerPanel";
+import {
+  Activity,
+  ShieldCheck,
+  Database,
+  Terminal,
+  RefreshCw,
+  Users,
+  RotateCcw,
+  Calendar,
+  Wallet,
+  Sliders,
+} from "lucide-react";
 
 export default function QuantEdgeApp() {
   const [strategies, setStrategies] = useState<Strategy[]>([]);
@@ -29,6 +44,7 @@ export default function QuantEdgeApp() {
   const [userEmail, setUserEmail] = useState<string>("quant@edge.io");
   const [workspaceName, setWorkspaceName] = useState<string>("Alpha Core Workspace");
   const [appliedParams, setAppliedParams] = useState<Record<string, any> | null>(null);
+  const [activePillarTab, setActivePillarTab] = useState<"committee" | "walk_forward" | "guardrails" | "catalysts" | "planner">("committee");
 
   // Initialize session & load initial data
   useEffect(() => {
@@ -281,13 +297,94 @@ export default function QuantEdgeApp() {
           </div>
         </div>
 
-        {/* Multi-Agent Quantitative Committee Panel */}
-        <CommitteePanel
-          onApplyProposal={(p) => setAppliedParams(p)}
-          onConveneCommittee={handleConveneCommittee}
-          selectedStrategy={selectedStrategy}
-          activeRun={activeTearsheet?.run || null}
-        />
+        {/* Institutional 5 Pillars & Committee Navigation Tabs */}
+        <div className="bg-[#0c1018] border border-surfaceBorder rounded-lg p-1.5 flex flex-wrap items-center gap-1.5 font-mono text-xs">
+          <button
+            onClick={() => setActivePillarTab("committee")}
+            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded transition ${
+              activePillarTab === "committee"
+                ? "bg-cyan-600 text-white font-bold shadow-sm"
+                : "text-gray-400 hover:text-white hover:bg-surface"
+            }`}
+          >
+            <Users className="w-3.5 h-3.5" />
+            <span>Multi-Agent Committee</span>
+          </button>
+
+          <button
+            onClick={() => setActivePillarTab("walk_forward")}
+            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded transition ${
+              activePillarTab === "walk_forward"
+                ? "bg-purple-600 text-white font-bold shadow-sm"
+                : "text-gray-400 hover:text-white hover:bg-surface"
+            }`}
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            <span>Pillar 3: Walk-Forward & Stress Lab</span>
+          </button>
+
+          <button
+            onClick={() => setActivePillarTab("guardrails")}
+            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded transition ${
+              activePillarTab === "guardrails"
+                ? "bg-emerald-600 text-white font-bold shadow-sm"
+                : "text-gray-400 hover:text-white hover:bg-surface"
+            }`}
+          >
+            <ShieldCheck className="w-3.5 h-3.5" />
+            <span>Pillars 2 & 4: Guardrails & Risk Monitor</span>
+          </button>
+
+          <button
+            onClick={() => setActivePillarTab("catalysts")}
+            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded transition ${
+              activePillarTab === "catalysts"
+                ? "bg-blue-600 text-white font-bold shadow-sm"
+                : "text-gray-400 hover:text-white hover:bg-surface"
+            }`}
+          >
+            <Calendar className="w-3.5 h-3.5" />
+            <span>Pillar 1: Catalysts & Macro Feed</span>
+          </button>
+
+          <button
+            onClick={() => setActivePillarTab("planner")}
+            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded transition ${
+              activePillarTab === "planner"
+                ? "bg-amber-600 text-white font-bold shadow-sm"
+                : "text-gray-400 hover:text-white hover:bg-surface"
+            }`}
+          >
+            <Wallet className="w-3.5 h-3.5" />
+            <span>Pillar 5: Capital & Tax Planner</span>
+          </button>
+        </div>
+
+        {/* Dynamic Pillar Workspace Rendering */}
+        {activePillarTab === "committee" && (
+          <CommitteePanel
+            onApplyProposal={(p) => setAppliedParams(p)}
+            onConveneCommittee={handleConveneCommittee}
+            selectedStrategy={selectedStrategy}
+            activeRun={activeTearsheet?.run || null}
+          />
+        )}
+
+        {activePillarTab === "walk_forward" && (
+          <WalkForwardLab selectedStrategy={selectedStrategy} />
+        )}
+
+        {activePillarTab === "guardrails" && (
+          <RiskGuardrailsPanel activeRun={activeTearsheet?.run || null} />
+        )}
+
+        {activePillarTab === "catalysts" && (
+          <CatalystRegimeFeed />
+        )}
+
+        {activePillarTab === "planner" && (
+          <CashflowPlannerPanel />
+        )}
 
         {/* Bottom: Trade Blotter */}
         <TradeBlotter trades={activeTearsheet?.recent_trades || []} />

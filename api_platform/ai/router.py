@@ -27,6 +27,9 @@ from core.ai.hypothesis_assistant import parse_hypothesis_to_spec
 from core.ai.backtest_critique import critique_backtest_run
 from core.agents.orchestrator import CommitteeOrchestrator
 from core.backtesting.data_loader import load_and_normalize_ohlcv
+from core.ai.catalyst_brief import CatalystBriefOutput, generate_catalyst_regime_brief
+from core.research.catalysts import get_default_catalysts, MarketCatalystEvent
+from infrastructure.database.models import MarketCatalyst
 
 router = APIRouter(prefix="/ai", tags=["Grounded AI"])
 
@@ -316,3 +319,107 @@ def get_committee_report(
     if not report:
         raise HTTPException(status_code=404, detail="Committee report not found")
     return report.report_json
+
+
+class CatalystBriefRequest(BaseModel):
+    symbol: str = Field(default="XAUUSD")
+    timeframe: str = Field(default="1H")
+    limit_bars: int = Field(default=300, ge=30, le=1000)
+
+
+@router.post("/catalyst-brief", response_model=CatalystBriefOutput)
+def create_catalyst_brief(
+    payload: CatalystBriefRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    workspace: Workspace = Depends(get_current_workspace),
+):
+    """
+    Produces a grounded macro catalyst and regime briefing for the target symbol.
+    """
+    bars = (
+        db.query(OHLCVBar)
+        .filter(OHLCVBar.symbol == payload.symbol, OHLCVBar.timeframe == payload.timeframe)
+        .order_by(OHLCVBar.ts_utc.desc())
+        .limit(payload.limit_bars)
+        .all()
+    )
+
+    if bars and len(bars) >= 30:
+        bars_sorted = sorted(bars, key=lambda b: b.ts_utc)
+        df = pd.DataFrame([
+            {
+                "timestamp": b.ts_utc,
+                "open": b.open,
+                "high": b.high,
+                "low": b.low,
+                "close": b.close,
+                "volume": b.volume,
+            }
+            for b in bars_sorted
+        ])
+    else:
+        try:
+            from pathlib import Path
+            csv_path = Path("data/XAUUSD_1H_merged.csv")
+            if csv_path.exists():
+                df = load_and_normalize_ohlcv(csv_path)
+                if len(df) > payload.limit_bars:
+                    df = df.iloc[-payload.limit_bars:].reset_index(drop=True)
+            else:
+                raise FileNotFoundError()
+        except Exception:
+            dates = pd.date_range("2024-01-01", periods=100, freq="h")
+            df = pd.DataFrame({
+                "timestamp": dates,
+                "open": [2000.0 + i * 0.5 for i in range(100)],
+                "high": [2005.0 + i * 0.5 for i in range(100)],
+                "low": [1995.0 + i * 0.5 for i in range(100)],
+                "close": [2002.0 + i * 0.5 for i in range(100)],
+                "volume": [1000.0] * 100,
+            })
+
+    # Fetch catalysts
+    db_cats = db.query(MarketCatalyst).filter(
+        (MarketCatalyst.workspace_id == workspace.id) | (MarketCatalyst.workspace_id == None)
+    ).all()
+
+    if db_cats:
+        catalysts = [
+            MarketCatalystEvent(
+                id=str(c.id),
+                timestamp_utc=c.timestamp_utc,
+                symbol=c.symbol,
+                title=c.title,
+                category=c.category,
+                impact=c.impact,
+                sentiment=c.sentiment,
+                actual_value=c.actual_value,
+                forecast_value=c.forecast_value,
+                previous_value=c.previous_value,
+                source=c.source,
+            )
+            for c in db_cats
+        ]
+    else:
+        catalysts = get_default_catalysts(symbol=payload.symbol)
+
+    brief = generate_catalyst_regime_brief(
+        ohlcv_df=df,
+        catalysts=catalysts,
+        symbol=payload.symbol,
+    )
+
+    record_usage(
+        db=db,
+        workspace_id=workspace.id,
+        user_id=current_user.id,
+        event_type="ai_catalyst_brief",
+        units=400.0,
+        unit_type="tokens",
+        cost_cents=0.75,
+        metadata={"symbol": payload.symbol},
+    )
+
+    return brief
+

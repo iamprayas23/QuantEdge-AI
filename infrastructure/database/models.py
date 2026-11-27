@@ -376,3 +376,110 @@ class CommitteeReport(Base):
     strategy_version = relationship("StrategyVersion")
     backtest_run = relationship("BacktestRun")
 
+
+# =========================================================================
+# 7. Pillar 1: Market Catalysts & Scheduled Events
+# =========================================================================
+
+class MarketCatalyst(Base):
+    __tablename__ = "market_catalysts"
+
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(GUID(), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True, index=True)
+    
+    timestamp_utc = Column(DateTime(timezone=True), nullable=False, index=True)
+    symbol = Column(String(32), nullable=False, default="ALL", index=True)
+    title = Column(String(255), nullable=False)
+    category = Column(String(64), nullable=False, default="macro")  # macro, rates, liquidity, earnings, geopolitical
+    impact = Column(String(16), nullable=False, default="HIGH")     # HIGH, MEDIUM, LOW
+    sentiment = Column(String(16), nullable=False, default="NEUTRAL") # HAWKISH, DOVISH, BULLISH, BEARISH, NEUTRAL
+
+    actual_value = Column(String(64))
+    forecast_value = Column(String(64))
+    previous_value = Column(String(64))
+    source = Column(String(128), default="Economic Calendar")
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index("idx_catalyst_symbol_ts", "symbol", "timestamp_utc"),
+    )
+
+
+# =========================================================================
+# 8. Pillar 2: Execution & Risk Rule Profiles
+# =========================================================================
+
+class RiskRuleProfileModel(Base):
+    __tablename__ = "risk_rule_profiles"
+
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(GUID(), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    name = Column(String(255), nullable=False, default="Standard Institutional Discipline")
+    max_risk_per_trade_pct = Column(Float, nullable=False, default=0.01)
+    daily_loss_limit_pct = Column(Float, nullable=False, default=0.03)
+    daily_loss_limit_abs = Column(Float)
+    max_drawdown_pct = Column(Float, nullable=False, default=0.15)
+    drawdown_mode = Column(String(32), nullable=False, default="trailing")  # static, trailing
+    max_consecutive_losses = Column(Integer, nullable=False, default=3)
+    cooldown_bars = Column(Integer, nullable=False, default=12)
+    max_trades_per_day = Column(Integer, nullable=False, default=5)
+    max_gross_exposure_pct = Column(Float, nullable=False, default=1.0)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+# =========================================================================
+# 9. Pillar 3: Walk-Forward Validation & Stress Testing Runs
+# =========================================================================
+
+class WalkForwardRun(Base):
+    __tablename__ = "walk_forward_runs"
+
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(GUID(), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    strategy_type = Column(String(64), nullable=False, default="rsi")
+    symbol = Column(String(32), nullable=False, default="XAUUSD")
+    timeframe = Column(String(16), nullable=False, default="1H")
+    mode = Column(String(32), nullable=False, default="rolling")  # rolling, anchored
+
+    num_windows = Column(Integer, nullable=False)
+    overall_wfe = Column(Float, nullable=False)
+    parameter_stability_score = Column(Float, nullable=False)
+    robustness_verdict = Column(String(32), nullable=False)  # ROBUST, BORDERLINE, OVERFIT
+
+    summary_verdict = Column(Text, nullable=False)
+    config_json = Column(SafeJSON, nullable=False)
+    results_json = Column(SafeJSON, nullable=False)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+# =========================================================================
+# 10. Pillar 5: Personal Capital, Cash Flow & Goal Plans
+# =========================================================================
+
+class CashflowPlanModel(Base):
+    __tablename__ = "cashflow_plans"
+
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(GUID(), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    name = Column(String(255), nullable=False, default="Primary Capital Plan")
+    monthly_net_cashflow = Column(Float, nullable=False)
+    savings_rate_pct = Column(Float, nullable=False)
+    emergency_runway_months = Column(Float, nullable=False)
+    health_status = Column(String(32), nullable=False)  # CRITICAL, ADEQUATE, ROBUST
+    total_10yr_tax_fee_drag_pct = Column(Float, nullable=False)
+
+    plan_json = Column(SafeJSON, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+

@@ -161,6 +161,76 @@ export const api = {
   getCommitteeReport: (reportId: string) =>
     request<import("@/types").CommitteeReviewOutput>(`/ai/committee-reports/${reportId}`),
 
+  // Pillar 1: Catalysts & Brief
+  getCatalysts: (symbol?: string, limit = 50) =>
+    request<import("@/types").MarketCatalystEvent[]>(
+      `/research/catalysts?${symbol ? `symbol=${symbol}&` : ""}limit=${limit}`
+    ),
+
+  getCatalystBrief: (symbol = "XAUUSD", timeframe = "1H") =>
+    request<import("@/types").CatalystBriefOutput>("/ai/catalyst-brief", {
+      method: "POST",
+      body: JSON.stringify({ symbol, timeframe, limit_bars: 300 }),
+    }),
+
+  // Pillar 2: Guardrails & Rule Discipline
+  listRiskProfiles: () =>
+    request<import("@/types").RiskRuleProfile[]>("/risk/guardrails/profiles"),
+
+  createRiskProfile: (payload: any) =>
+    request<{ id: string; status: string }>("/risk/guardrails/profiles", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  evaluateOrderRisk: (payload: any) =>
+    request<import("@/types").GuardrailEvaluationResult>("/risk/guardrails/evaluate", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  auditBacktestRules: (backtestRunId: string, profileId?: string) =>
+    request<import("@/types").GuardrailAuditReport>("/risk/guardrails/audit-backtest", {
+      method: "POST",
+      body: JSON.stringify({ backtest_run_id: backtestRunId, profile_id: profileId }),
+    }),
+
+  // Pillar 3: Walk-Forward & Stress Testing
+  runWalkForward: (payload: any) =>
+    request<import("@/types").WalkForwardAnalysisResult>("/research/walk-forward", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  listWalkForwardRuns: (limit = 10) =>
+    request<any[]>(`/research/walk-forward/runs?limit=${limit}`),
+
+  runStressTest: (payload: any) =>
+    request<import("@/types").StressTestReport[]>("/research/stress-test", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  // Pillar 4: Portfolio Risk Monitor
+  getPortfolioRiskMonitor: (targetVol = 15.0) =>
+    request<import("@/types").PortfolioRiskSnapshot>(`/risk/portfolio-monitor?target_vol_pct=${targetVol}`),
+
+  // Pillar 5: Personal Capital Planning
+  calculateFinancePlan: (payload: any) =>
+    request<import("@/types").FinancialPlanOutput>("/finance/plan", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  saveFinancePlan: (payload: any) =>
+    request<{ id: string; status: string; plan: import("@/types").FinancialPlanOutput }>("/finance/plans/save", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  listFinancePlans: () =>
+    request<any[]>("/finance/plans"),
+
   // Billing
   getUsage: () => request<any>("/billing/usage"),
 };

@@ -14,6 +14,9 @@ from api_platform.backtests.router import router as backtest_router
 from api_platform.billing.router import router as billing_router
 from api_platform.data.router import router as data_router
 from api_platform.ai.router import router as ai_router
+from api_platform.research.router import router as research_router
+from api_platform.risk.router import router as risk_router
+from api_platform.finance.router import router as finance_router
 
 # Auto-create tables if running in development mode
 try:
@@ -80,6 +83,9 @@ app.include_router(backtest_router)
 app.include_router(billing_router)
 app.include_router(data_router)
 app.include_router(ai_router)
+app.include_router(research_router)
+app.include_router(risk_router)
+app.include_router(finance_router)
 
 
 @app.get("/")

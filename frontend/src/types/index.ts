@@ -221,3 +221,227 @@ export interface CommitteeReportSummary {
   created_at: string;
 }
 
+// =========================================================================
+// 5 Finance & Trading Pillars Interfaces
+// =========================================================================
+
+// Pillar 1: Market Catalyst & Regime Context
+export interface MarketCatalystEvent {
+  id?: string;
+  timestamp_utc: string;
+  symbol: string;
+  title: string;
+  category: "macro" | "rates" | "liquidity" | "earnings" | "geopolitical" | string;
+  impact: "HIGH" | "MEDIUM" | "LOW" | string;
+  sentiment: "HAWKISH" | "DOVISH" | "BULLISH" | "BEARISH" | "NEUTRAL" | string;
+  actual_value?: string;
+  forecast_value?: string;
+  previous_value?: string;
+  source: string;
+}
+
+export interface CatalystBriefOutput {
+  symbol: string;
+  as_of_ts: string;
+  current_regime: string;
+  realized_vol_pct: number;
+  active_or_upcoming_catalysts: Array<Record<string, any>>;
+  recent_catalyst_shocks: Array<Record<string, any>>;
+  catalyst_impact_metrics: Record<string, any>;
+  executive_brief: string;
+  risk_advisory: string;
+  disclaimer: string;
+}
+
+// Pillar 2: Rule Discipline & Execution Guardrails
+export interface RiskRuleProfile {
+  id?: string;
+  name: string;
+  max_risk_per_trade_pct: number;
+  daily_loss_limit_pct: number;
+  daily_loss_limit_abs?: number;
+  max_drawdown_pct: number;
+  drawdown_mode: "static" | "trailing" | string;
+  max_consecutive_losses: number;
+  cooldown_bars: number;
+  max_trades_per_day: number;
+  max_gross_exposure_pct: number;
+}
+
+export interface RuleBreach {
+  timestamp: string;
+  rule_name: string;
+  threshold: any;
+  observed_value: any;
+  severity: "WARNING" | "BREACH" | "CRITICAL";
+  action_taken: string;
+  message: string;
+}
+
+export interface GuardrailEvaluationResult {
+  allowed: boolean;
+  adjusted_size: number;
+  breached_rules: RuleBreach[];
+  rule_adherence_score: number;
+  cooldown_remaining_bars: number;
+  current_daily_pnl: number;
+  current_drawdown_pct: number;
+  consecutive_losses: number;
+  trades_today: number;
+  summary_verdict: string;
+}
+
+export interface GuardrailAuditReport {
+  profile_name: string;
+  total_trades_evaluated: number;
+  compliant_trades: number;
+  breach_count: number;
+  rule_adherence_score: number;
+  capital_lost_to_breaches: number;
+  counterfactual_final_equity: number;
+  actual_final_equity: number;
+  disciplined_alpha_preserved: number;
+  breach_breakdown: Record<string, number>;
+  detailed_breaches: RuleBreach[];
+  summary_recommendation: string;
+}
+
+// Pillar 3: Walk-Forward & Stress Testing
+export interface WalkForwardWindowResult {
+  window_index: number;
+  train_start: string;
+  train_end: string;
+  test_start: string;
+  test_end: string;
+  selected_params: Record<string, any>;
+  is_metrics: Record<string, any>;
+  oos_metrics: Record<string, any>;
+  wfe: number;
+}
+
+export interface WalkForwardAnalysisResult {
+  strategy_type: string;
+  symbol: string;
+  timeframe: string;
+  mode: string;
+  num_windows: number;
+  overall_wfe: number;
+  parameter_stability_score: number;
+  robustness_verdict: "ROBUST" | "BORDERLINE" | "OVERFIT" | string;
+  windows: WalkForwardWindowResult[];
+  stitched_oos_summary: Record<string, any>;
+  summary_verdict: string;
+}
+
+export interface StressTestReport {
+  scenario_name: string;
+  description: string;
+  base_sharpe: number;
+  stressed_sharpe: number;
+  base_max_dd: number;
+  stressed_max_dd: number;
+  base_final_equity: number;
+  stressed_final_equity: number;
+  drawdown_expansion_pct: number;
+  equity_erosion_pct: number;
+  status: "PASS" | "DEGRADED" | "FAILED" | string;
+  critical_findings: string[];
+}
+
+// Pillar 4: Dynamic Risk & Underwater Tracker
+export interface UnderwaterTracker {
+  current_drawdown_pct: number;
+  current_underwater_bars: number;
+  max_historical_drawdown_pct: number;
+  max_historical_underwater_bars: number;
+  is_at_high_water_mark: boolean;
+  estimated_bars_to_recovery?: number;
+  recovery_status: "PEAK" | "SHALLOW_DIP" | "DEEP_DRAWDOWN" | "CRITICAL_RECESSION" | string;
+}
+
+export interface PortfolioRiskSnapshot {
+  as_of_ts: string;
+  current_equity: number;
+  high_water_mark: number;
+  current_drawdown_pct: number;
+  daily_drawdown_pct: number;
+  distance_to_daily_limit_pct: number;
+  distance_to_max_limit_pct: number;
+  realized_vol_pct: number;
+  vol_target_multiplier: number;
+  suggested_risk_pct: number;
+  underwater_state: UnderwaterTracker;
+  concentration_risk_level: "LOW" | "MEDIUM" | "HIGH" | string;
+  correlation_notes: string;
+  recommended_action: "NORMAL" | "TRIM_EXPOSURE" | "HALT" | string;
+  summary: string;
+}
+
+// Pillar 5: Personal Cash Flow & Capital Planning
+export interface CashFlowItem {
+  name: string;
+  amount: number;
+  flow_type: "income" | "expense";
+  frequency: "monthly" | "annual" | "one_time";
+  is_fixed: boolean;
+}
+
+export interface DebtItem {
+  name: string;
+  balance: number;
+  interest_rate_pct: number;
+  minimum_payment: number;
+}
+
+export interface FinancialGoal {
+  title: string;
+  target_amount: number;
+  current_savings: number;
+  target_months: number;
+}
+
+export interface EmergencyRunwayResult {
+  liquid_reserves: number;
+  monthly_fixed_expenses: number;
+  monthly_total_expenses: number;
+  runway_months: number;
+  health_status: "CRITICAL" | "ADEQUATE" | "ROBUST" | string;
+  recommended_target_reserve: number;
+  reserve_deficit_or_surplus: number;
+}
+
+export interface DebtPayoffComparison {
+  strategy_name: string;
+  total_interest_paid: number;
+  months_to_debt_free: number;
+  monthly_cash_freed_up: number;
+  summary: string;
+}
+
+export interface CompoundProjectionYear {
+  year: number;
+  gross_contributions: number;
+  gross_portfolio_value: number;
+  net_after_tax_fee_value: number;
+  annual_tax_drag: number;
+  cumulative_drag_dollars: number;
+}
+
+export interface FinancialPlanOutput {
+  plan_id: string;
+  as_of_ts: string;
+  total_monthly_income: number;
+  total_monthly_expenses: number;
+  monthly_net_cashflow: number;
+  savings_rate_pct: number;
+  emergency_runway: EmergencyRunwayResult;
+  debt_payoff_scenarios: DebtPayoffComparison[];
+  goal_projections: Array<Record<string, any>>;
+  compound_tax_drag_projection: CompoundProjectionYear[];
+  total_10yr_tax_fee_drag_pct: number;
+  executive_summary: string;
+  action_plan: string[];
+  disclaimer: string;
+}
+
+

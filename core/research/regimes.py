@@ -51,3 +51,63 @@ def compute_market_regimes(df: pd.DataFrame, period: int = 24) -> pd.DataFrame:
 
     df["trend_regime"] = [classify_trend(df.iloc[idx]) for idx in range(len(df))]
     return df
+
+
+def summarize_regime_distribution(df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    Summarize percentage time spent in each volatility and trend regime,
+    including average realized volatility per regime.
+    """
+    if "vol_regime" not in df.columns or "trend_regime" not in df.columns:
+        df = compute_market_regimes(df)
+
+    n = len(df)
+    if n == 0:
+        return {"vol_distribution": {}, "trend_distribution": {}, "mean_realized_vol": 0.0}
+
+    vol_counts = df["vol_regime"].value_counts(normalize=True).to_dict()
+    trend_counts = df["trend_regime"].value_counts(normalize=True).to_dict()
+
+    vol_dist = {str(k): round(float(v) * 100.0, 1) for k, v in vol_counts.items()}
+    trend_dist = {str(k): round(float(v) * 100.0, 1) for k, v in trend_counts.items()}
+
+    mean_vol = float(df["realized_vol"].dropna().mean()) if "realized_vol" in df.columns else 0.0
+
+    return {
+        "vol_distribution_pct": vol_dist,
+        "trend_distribution_pct": trend_dist,
+        "mean_realized_vol_pct": round(mean_vol, 2),
+        "total_bars_analyzed": n,
+    }
+
+
+def compute_regime_transition_matrix(df: pd.DataFrame) -> Dict[str, Dict[str, float]]:
+    """
+    Computes empirical transition probabilities from regime t to regime t+1.
+    """
+    if "trend_regime" not in df.columns:
+        df = compute_market_regimes(df)
+
+    series = df["trend_regime"].dropna()
+    if len(series) < 2:
+        return {}
+
+    states = ["trending_bull", "trending_bear", "ranging"]
+    transitions = {s1: {s2: 0 for s2 in states} for s1 in states}
+
+    s_arr = series.values
+    for i in range(len(s_arr) - 1):
+        curr_state = s_arr[i]
+        next_state = s_arr[i + 1]
+        if curr_state in transitions and next_state in transitions[curr_state]:
+            transitions[curr_state][next_state] += 1
+
+    prob_matrix = {}
+    for s1, counts in transitions.items():
+        total = sum(counts.values())
+        prob_matrix[s1] = {
+            s2: round(count / total, 3) if total > 0 else 0.0
+            for s2, count in counts.items()
+        }
+
+    return prob_matrix

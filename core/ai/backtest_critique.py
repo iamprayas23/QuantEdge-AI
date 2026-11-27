@@ -18,6 +18,8 @@ def critique_backtest_run(
     metrics: Dict[str, Any],
     parameters: Dict[str, Any],
     provider: Optional[LLMProvider] = None,
+    walk_forward_metrics: Optional[Dict[str, Any]] = None,
+    stress_test_reports: Optional[List[Dict[str, Any]]] = None,
 ) -> BacktestCritiqueOutput:
     """
     Produce grounded, evidence-backed critique citing exact numbers from run metrics.
@@ -101,6 +103,26 @@ def critique_backtest_run(
         strengths.append(f"Strong reward-to-risk ratio (average win is {payoff_ratio:.2f}x average loss).")
     if sharpe > 1.0:
         strengths.append(f"Healthy risk-adjusted return (annualized Sharpe of {sharpe:.2f}).")
+    
+    # Ingest Walk-Forward findings if provided
+    if walk_forward_metrics:
+        wfe = float(walk_forward_metrics.get("overall_wfe", 0.0))
+        stability = float(walk_forward_metrics.get("parameter_stability_score", 0.0))
+        verdict = str(walk_forward_metrics.get("robustness_verdict", "UNKNOWN"))
+        if wfe >= 0.55:
+            strengths.append(f"Walk-Forward Efficiency of {wfe:.2f} confirms strong Out-of-Sample generalization ({verdict}, {stability}% parameter stability).")
+        else:
+            vulnerabilities.append(f"Low Walk-Forward Efficiency ({wfe:.2f} < 0.55) indicates performance decay out-of-sample ({verdict}).")
+
+    # Ingest Stress-Test findings if provided
+    if stress_test_reports:
+        failed_scenarios = [s.get("scenario_name", "Unknown") for s in stress_test_reports if s.get("status") == "FAILED"]
+        passed_scenarios = [s.get("scenario_name", "Unknown") for s in stress_test_reports if s.get("status") == "PASS"]
+        if passed_scenarios:
+            strengths.append(f"Resilient under stress testing: Passed {len(passed_scenarios)} adverse cost/shock battery tests.")
+        if failed_scenarios:
+            vulnerabilities.append(f"Failed under stress scenarios: {', '.join(failed_scenarios)}. Friction wipes out strategy edge.")
+
     if not strengths:
         strengths.append("Conservative position sizing prevents rapid total capital liquidation.")
 
@@ -116,9 +138,9 @@ def critique_backtest_run(
 
     # Recommendations
     recs = [
-        "Conduct a walk-forward optimization across rolling 6-month splits to verify stability.",
+        "Conduct a walk-forward optimization across rolling windows to verify parameter stability." if not walk_forward_metrics else "Deploy walk-forward re-calibration every 100 bars.",
         f"Implement a trend/volatility filter (e.g. 200 EMA or ADX) to avoid counter-trend trades during high drawdowns.",
-        f"Stress test with doubled slippage ({parameters.get('slippage_bps', 1.0)*2:.1f} bps) to evaluate execution fragility.",
+        f"Stress test with doubled slippage ({parameters.get('slippage_bps', 1.0)*2:.1f} bps) to evaluate execution fragility." if not stress_test_reports else "Apply tighter take-profit targets to offset stress scenario friction.",
     ]
 
     exec_summary = (
@@ -127,19 +149,24 @@ def critique_backtest_run(
         f"Overfitting risk is rated {risk_level} primarily due to {rationale}"
     )
 
+    exact_metrics = {
+        "total_return_pct": total_return,
+        "sharpe_ratio": sharpe,
+        "sortino_ratio": sortino,
+        "max_drawdown_pct": max_dd,
+        "win_rate_pct": win_rate,
+        "profit_factor": profit_factor,
+        "total_trades": total_trades,
+        "payoff_ratio": payoff_ratio,
+    }
+    if walk_forward_metrics:
+        exact_metrics["walk_forward_wfe"] = walk_forward_metrics.get("overall_wfe")
+        exact_metrics["parameter_stability"] = walk_forward_metrics.get("parameter_stability_score")
+
     return BacktestCritiqueOutput(
         run_id=run_id,
         executive_summary=exec_summary,
-        exact_metrics_cited={
-            "total_return_pct": total_return,
-            "sharpe_ratio": sharpe,
-            "sortino_ratio": sortino,
-            "max_drawdown_pct": max_dd,
-            "win_rate_pct": win_rate,
-            "profit_factor": profit_factor,
-            "total_trades": total_trades,
-            "payoff_ratio": payoff_ratio,
-        },
+        exact_metrics_cited=exact_metrics,
         overfitting_analysis=overfitting,
         drawdown_critique=drawdown,
         regime_breakdown=regimes,

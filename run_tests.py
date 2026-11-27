@@ -3,7 +3,7 @@ import os
 import sys
 import time
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 import pandas as pd
 import numpy as np
 
@@ -12,7 +12,14 @@ os.environ["DATABASE_URL"] = "sqlite:///./test_quantedge_suite.db"
 os.environ["USE_IN_MEMORY_QUEUE"] = "true"
 sys.path.insert(0, os.path.abspath("."))
 
-from infrastructure.database.models import Base, CommitteeReport
+from infrastructure.database.models import (
+    Base,
+    CommitteeReport,
+    MarketCatalyst,
+    RiskRuleProfileModel,
+    WalkForwardRun,
+    CashflowPlanModel,
+)
 from infrastructure.database.connection import engine, SessionLocal
 from core.execution.cost_model import CostModel
 from core.risk.position_sizer import calculate_position_size
@@ -38,11 +45,63 @@ from core.agents import (
     RiskAgent,
     PortfolioManagerAgent,
 )
+from core.research.catalysts import (
+    MarketCatalystEvent,
+    get_default_catalysts,
+    align_catalysts_with_bars,
+    compute_catalyst_regime_impact,
+)
+from core.ai.catalyst_brief import CatalystBriefOutput, generate_catalyst_regime_brief
+from core.risk.guardrails import (
+    RiskRuleProfile,
+    RuleBreach,
+    GuardrailEvaluationResult,
+    GuardrailAuditReport,
+    evaluate_proposed_trade,
+    audit_trade_log_against_guardrails,
+)
+from core.research.walk_forward import (
+    WalkForwardConfig,
+    WalkForwardAnalysisResult,
+    run_walk_forward_analysis,
+)
+from core.research.stress import (
+    StressScenario,
+    StressTestReport,
+    run_stress_battery,
+)
+from core.risk.portfolio_risk import (
+    VolatilityTargetConfig,
+    UnderwaterTracker,
+    PortfolioRiskSnapshot,
+    compute_volatility_targeting_multiplier,
+    track_underwater_state,
+    generate_portfolio_risk_snapshot,
+)
+from core.finance.planner import (
+    CashFlowItem,
+    DebtItem,
+    FinancialGoal,
+    TaxDragConfig,
+    FinancialPlanOutput,
+    calculate_cash_flow_and_runway,
+    simulate_debt_payoff,
+    simulate_compound_tax_drag,
+    generate_comprehensive_financial_plan,
+)
 
 # API layer functions
 import api_platform.auth.schemas as auth_schemas
 import api_platform.auth.service as auth_service
 import api_platform.strategies.schemas as strat_schemas
+import api_platform.strategies.service as strat_service
+import api_platform.backtests.schemas as bt_schemas
+import api_platform.backtests.service as bt_service
+import api_platform.billing.service as bill_service
+import api_platform.ai.router as ai_router
+import api_platform.research.router as research_router
+import api_platform.risk.router as risk_router
+import api_platform.finance.router as finance_router
 import api_platform.strategies.service as strat_service
 import api_platform.backtests.schemas as bt_schemas
 import api_platform.backtests.service as bt_service
@@ -518,6 +577,273 @@ class TestMultiAgentCommittee(unittest.TestCase):
         # 5. Verify usage was recorded
         usage = bill_service.get_workspace_usage_summary(self.db, ws.id)
         self.assertGreaterEqual(usage["total_records"], 1)
+
+
+class TestFinanceAndTradingPillars(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        Base.metadata.create_all(bind=engine)
+        cls.db = SessionLocal()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.db.close()
+
+    def test_pillar1_catalyst_alignment_and_impact(self):
+        dates = pd.date_range("2023-01-01", periods=100, freq="h", tz="UTC")
+        df = pd.DataFrame({
+            "timestamp": dates,
+            "open": [2000.0 + i * 0.1 for i in range(100)],
+            "high": [2005.0 + i * 0.1 for i in range(100)],
+            "low": [1995.0 + i * 0.1 for i in range(100)],
+            "close": [2002.0 + i * 0.1 for i in range(100)],
+            "volume": [1000.0] * 100,
+        })
+
+        catalysts = get_default_catalysts(symbol="XAUUSD")
+        self.assertGreater(len(catalysts), 0)
+
+        aligned = align_catalysts_with_bars(df, catalysts, window_hours=12.0)
+        self.assertIn("nearest_catalyst_title", aligned.columns)
+        self.assertIn("in_catalyst_window", aligned.columns)
+
+        impact = compute_catalyst_regime_impact(aligned)
+        self.assertIn("range_multiplier", impact)
+        self.assertIn("vol_spike_ratio", impact)
+
+        brief = generate_catalyst_regime_brief(df, catalysts, symbol="XAUUSD")
+        self.assertIsInstance(brief, CatalystBriefOutput)
+        self.assertIn("XAUUSD", brief.symbol)
+        self.assertGreater(len(brief.executive_brief), 20)
+
+    def test_pillar2_guardrail_rule_evaluations(self):
+        profile = RiskRuleProfile(
+            max_risk_per_trade_pct=0.01,
+            daily_loss_limit_pct=0.03,
+            max_drawdown_pct=0.15,
+            drawdown_mode="trailing",
+            max_consecutive_losses=3,
+            cooldown_bars=6,
+            max_trades_per_day=4,
+        )
+
+        now = datetime.now(timezone.utc)
+
+        # 1. Normal allowed trade
+        res_ok = evaluate_proposed_trade(
+            profile=profile,
+            current_equity=10000.0,
+            current_cash=10000.0,
+            high_water_mark=10000.0,
+            daily_start_equity=10000.0,
+            today_trades_count=1,
+            consecutive_losses_count=0,
+            cooldown_remaining=0,
+            proposed_risk_pct=0.01,
+            proposed_size=2.0,
+            current_ts=now,
+        )
+        self.assertTrue(res_ok.allowed)
+        self.assertEqual(res_ok.adjusted_size, 2.0)
+        self.assertEqual(len(res_ok.breached_rules), 0)
+
+        # 2. Daily loss limit breach (down 4% today)
+        res_daily_loss = evaluate_proposed_trade(
+            profile=profile,
+            current_equity=9600.0,
+            current_cash=9600.0,
+            high_water_mark=10000.0,
+            daily_start_equity=10000.0,
+            today_trades_count=2,
+            consecutive_losses_count=1,
+            cooldown_remaining=0,
+            proposed_risk_pct=0.01,
+            proposed_size=2.0,
+            current_ts=now,
+        )
+        self.assertFalse(res_daily_loss.allowed)
+        self.assertEqual(res_daily_loss.adjusted_size, 0.0)
+        self.assertTrue(any(b.rule_name == "daily_loss_limit_pct" for b in res_daily_loss.breached_rules))
+
+        # 3. Consecutive losses cooldown
+        res_cooldown = evaluate_proposed_trade(
+            profile=profile,
+            current_equity=9800.0,
+            current_cash=9800.0,
+            high_water_mark=10000.0,
+            daily_start_equity=9900.0,
+            today_trades_count=2,
+            consecutive_losses_count=3,
+            cooldown_remaining=4,
+            proposed_risk_pct=0.01,
+            proposed_size=2.0,
+            current_ts=now,
+        )
+        self.assertFalse(res_cooldown.allowed)
+        self.assertTrue(any(b.rule_name == "consecutive_losses_cooldown" for b in res_cooldown.breached_rules))
+
+        # 4. Oversized risk (clamp size)
+        res_oversize = evaluate_proposed_trade(
+            profile=profile,
+            current_equity=10000.0,
+            current_cash=10000.0,
+            high_water_mark=10000.0,
+            daily_start_equity=10000.0,
+            today_trades_count=1,
+            consecutive_losses_count=0,
+            cooldown_remaining=0,
+            proposed_risk_pct=0.02,  # exceeds 0.01 limit
+            proposed_size=4.0,
+            current_ts=now,
+        )
+        self.assertTrue(res_oversize.allowed)
+        self.assertAlmostEqual(res_oversize.adjusted_size, 2.0, places=2)
+        self.assertTrue(any(b.rule_name == "max_risk_per_trade_pct" for b in res_oversize.breached_rules))
+
+    def test_pillar2_guardrail_audit_against_trade_log(self):
+        profile = RiskRuleProfile(
+            daily_loss_limit_pct=0.02,
+            max_drawdown_pct=0.10,
+            max_consecutive_losses=2,
+        )
+        t1 = datetime(2023, 1, 1, 10, 0, tzinfo=timezone.utc)
+        t2 = datetime(2023, 1, 1, 14, 0, tzinfo=timezone.utc)
+        t3 = datetime(2023, 1, 1, 16, 0, tzinfo=timezone.utc)
+        t4 = datetime(2023, 1, 2, 10, 0, tzinfo=timezone.utc)
+
+        trades = [
+            TradeRecord(1, "XAUUSD", "long", t1, t1, 1900.0, 1870.0, 1.0, -250.0, -250.0, -2.5, 0.0, 0.0, "sl", 2),
+            TradeRecord(2, "XAUUSD", "long", t2, t2, 1870.0, 1850.0, 1.0, -200.0, -200.0, -2.0, 0.0, 0.0, "sl", 2),
+            TradeRecord(3, "XAUUSD", "long", t3, t3, 1850.0, 1820.0, 1.0, -300.0, -300.0, -3.0, 0.0, 0.0, "sl", 2),
+            TradeRecord(4, "XAUUSD", "long", t4, t4, 1820.0, 1860.0, 1.0, 400.0, 400.0, 4.0, 0.0, 0.0, "tp", 5),
+        ]
+
+        audit = audit_trade_log_against_guardrails(profile, trades, [], initial_capital=10000.0)
+        self.assertIsInstance(audit, GuardrailAuditReport)
+        self.assertGreater(audit.breach_count, 0)
+        self.assertGreater(audit.capital_lost_to_breaches, 0.0)
+        self.assertGreater(audit.counterfactual_final_equity, audit.actual_final_equity)
+
+    def test_pillar3_walk_forward_and_stress(self):
+        dates = pd.date_range("2023-01-01", periods=450, freq="h")
+        df = pd.DataFrame({
+            "timestamp": dates,
+            "open": [2000.0 + np.sin(i / 10.0) * 20.0 for i in range(450)],
+            "high": [2005.0 + np.sin(i / 10.0) * 20.0 for i in range(450)],
+            "low": [1995.0 + np.sin(i / 10.0) * 20.0 for i in range(450)],
+            "close": [2002.0 + np.sin(i / 10.0) * 20.0 for i in range(450)],
+            "volume": [1000.0] * 450,
+        })
+
+        cfg = WalkForwardConfig(train_bars=250, test_bars=80, step_bars=80, mode="rolling")
+        wf_res = run_walk_forward_analysis("rsi", df, config=cfg)
+        self.assertIsInstance(wf_res, WalkForwardAnalysisResult)
+        self.assertGreater(wf_res.num_windows, 0)
+        self.assertIn(wf_res.robustness_verdict, ["ROBUST", "BORDERLINE", "OVERFIT"])
+
+        # Stress testing
+        stress_reports = run_stress_battery("rsi", df, params={"rsi_period": 14})
+        self.assertGreaterEqual(len(stress_reports), 3)
+        for r in stress_reports:
+            self.assertIn(r.status, ["PASS", "DEGRADED", "FAILED"])
+
+    def test_pillar4_dynamic_portfolio_risk(self):
+        # 1. Vol targeting scale
+        mult_calm = compute_volatility_targeting_multiplier(7.5, VolatilityTargetConfig(target_annual_vol_pct=15.0))
+        self.assertEqual(mult_calm, 2.0)
+
+        mult_spike = compute_volatility_targeting_multiplier(30.0, VolatilityTargetConfig(target_annual_vol_pct=15.0))
+        self.assertEqual(mult_spike, 0.5)
+
+        # 2. Underwater tracker
+        t0 = datetime(2023, 1, 1, tzinfo=timezone.utc)
+        pts = [
+            EquityPoint(t0, 10000.0, 10000.0, 0.0, 0.0, 0.0),
+            EquityPoint(t0, 9500.0, 9500.0, 500.0, 5.0, -0.05),
+            EquityPoint(t0, 9200.0, 9200.0, 800.0, 8.0, -0.03),
+        ]
+        underwater = track_underwater_state(pts)
+        self.assertAlmostEqual(underwater.current_drawdown_pct, 8.0, places=1)
+        self.assertFalse(underwater.is_at_high_water_mark)
+
+        # 3. Snapshot
+        snap = generate_portfolio_risk_snapshot(
+            current_equity=9200.0,
+            daily_start_equity=9500.0,
+            equity_series=pts,
+            current_realized_vol=18.0,
+            daily_limit_pct=3.0,
+            max_limit_pct=15.0,
+        )
+        self.assertIsInstance(snap, PortfolioRiskSnapshot)
+        self.assertIn(snap.recommended_action, ["NORMAL", "TRIM_EXPOSURE", "HALT"])
+
+    def test_pillar5_personal_cash_flow_planner(self):
+        flows = [
+            CashFlowItem(name="Salary", amount=8000.0, flow_type="income", frequency="monthly", is_fixed=True),
+            CashFlowItem(name="Rent", amount=2500.0, flow_type="expense", frequency="monthly", is_fixed=True),
+            CashFlowItem(name="Living", amount=1500.0, flow_type="expense", frequency="monthly", is_fixed=True),
+        ]
+        cf = calculate_cash_flow_and_runway(flows, liquid_reserves=24000.0)
+        self.assertEqual(cf["net_cashflow"], 4000.0)
+        self.assertEqual(cf["savings_rate_pct"], 50.0)
+        self.assertEqual(cf["runway"].runway_months, 6.0)
+        self.assertEqual(cf["runway"].health_status, "ROBUST")
+
+        # Debt elimination comparison
+        debts = [
+            DebtItem(name="Card", balance=3000.0, interest_rate_pct=20.0, minimum_payment=100.0),
+            DebtItem(name="Loan", balance=10000.0, interest_rate_pct=6.0, minimum_payment=150.0),
+        ]
+        debt_sims = simulate_debt_payoff(debts, extra_monthly_payment=500.0)
+        self.assertEqual(len(debt_sims), 2)
+        # Avalanche interest should be <= Snowball interest
+        self.assertLessEqual(debt_sims[0].total_interest_paid, debt_sims[1].total_interest_paid + 1.0)
+
+        # Compound tax drag simulation
+        proj = simulate_compound_tax_drag(initial_capital=10000.0, monthly_contribution=1000.0, years=5)
+        self.assertEqual(len(proj), 5)
+        self.assertGreater(proj[-1].cumulative_drag_dollars, 0.0)
+
+        # Full plan
+        plan = generate_comprehensive_financial_plan(flows, liquid_reserves=24000.0, debts=debts)
+        self.assertIsInstance(plan, FinancialPlanOutput)
+        self.assertIn("not provide certified financial", str(plan.disclaimer))
+
+    def test_pillars_api_endpoints(self):
+        email = f"pillar_tester_{int(time.time())}@quantedge.io"
+        u, ws = auth_service.create_user_with_workspace(
+            self.db, email=email, password="Password123!", workspace_name="Pillar Lab"
+        )
+
+        # 1. Research Catalysts
+        cats = research_router.list_catalysts(symbol="XAUUSD", limit=10, db=self.db, workspace=ws)
+        self.assertGreater(len(cats), 0)
+
+        # 2. Risk Profiles & Evaluate
+        profs = risk_router.list_profiles(db=self.db, workspace=ws)
+        self.assertGreater(len(profs), 0)
+
+        eval_order = risk_router.evaluate_trade(
+            payload=risk_router.EvaluateOrderRequest(proposed_risk_pct=0.01, proposed_size=1.0),
+            db=self.db,
+            workspace=ws,
+        )
+        self.assertIsInstance(eval_order, GuardrailEvaluationResult)
+
+        # 3. Portfolio Risk Monitor
+        monitor = risk_router.get_portfolio_risk_monitor(target_vol_pct=15.0, db=self.db, workspace=ws)
+        self.assertIsInstance(monitor, PortfolioRiskSnapshot)
+
+        # 4. Finance Plan
+        fplan = finance_router.calculate_plan(
+            payload=finance_router.PlanRequest(liquid_reserves=20000.0),
+            db=self.db,
+            current_user=u,
+            workspace=ws,
+        )
+        self.assertIsInstance(fplan, FinancialPlanOutput)
+        self.assertIn(fplan.emergency_runway.health_status, ["ADEQUATE", "ROBUST"])
 
 
 if __name__ == "__main__":
