@@ -47,6 +47,53 @@ export default function QuantEdgeApp() {
   const [activePillarTab, setActivePillarTab] = useState<"committee" | "walk_forward" | "guardrails" | "catalysts" | "planner">("committee");
 
   // Initialize session & load initial data
+  // 1. Immediately fetch market data on mount with instant fallback
+  useEffect(() => {
+    let isMounted = true;
+    const loadMarketData = async () => {
+      try {
+        const barData = await api.getBars("XAUUSD", "1H", 300);
+        if (isMounted && barData && barData.length > 0) {
+          setBars(barData);
+          return;
+        }
+      } catch (err) {
+        console.warn("Backend not yet reachable on port 8000; applying instant seed fallback:", err);
+      }
+
+      // Instant fallback so chart canvas renders immediately
+      if (isMounted) {
+        const now = Math.floor(Date.now() / 1000);
+        const fallback: OHLCVBar[] = [];
+        let curr = 2025.0;
+        for (let i = 200; i >= 0; i--) {
+          const time = now - i * 3600;
+          const delta = Math.sin(i / 6.0) * 3.5 + ((i % 3) - 1) * 1.5;
+          const open = curr;
+          const close = open + delta;
+          const high = Math.max(open, close) + Math.abs(Math.cos(i / 4.0)) * 2.0;
+          const low = Math.min(open, close) - Math.abs(Math.sin(i / 4.0)) * 2.0;
+          fallback.push({
+            time,
+            open: parseFloat(open.toFixed(2)),
+            high: parseFloat(high.toFixed(2)),
+            low: parseFloat(low.toFixed(2)),
+            close: parseFloat(close.toFixed(2)),
+            volume: 1200 + (i % 5) * 200,
+          });
+          curr = close;
+        }
+        setBars(fallback);
+      }
+    };
+
+    loadMarketData();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // 2. Initialize authenticated quant session and strategies
   useEffect(() => {
     const initSession = async () => {
       try {
@@ -64,68 +111,86 @@ export default function QuantEdgeApp() {
         setApiConnected(true);
 
         // Fetch user info
-        const me = await api.getMe();
-        setUserEmail(me.email);
-        if (me.workspaces && me.workspaces.length > 0) {
-          setWorkspaceName(me.workspaces[0].name);
+        try {
+          const me = await api.getMe();
+          setUserEmail(me.email);
+          if (me.workspaces && me.workspaces.length > 0) {
+            setWorkspaceName(me.workspaces[0].name);
+          }
+        } catch (meErr) {
+          console.warn("Could not fetch user profile:", meErr);
         }
 
         // Fetch strategies
-        let strats = await api.listStrategies();
-        if (strats.length === 0) {
-          // Create initial baseline strategies
-          const s1 = await api.createStrategy({
-            name: "Gold RSI Mean Reversion",
-            description: "Institutional 1H mean-reversion with volatility stops",
-            strategy_type: "rsi",
-            initial_parameters: {
-              rsi_period: 14,
-              oversold: 30.0,
-              overbought: 70.0,
-              risk_per_trade_pct: 0.01,
-              risk_reward_ratio: 2.0,
-              sl_atr_mult: 1.5,
-              max_bars_held: 48,
-            },
-          });
-          const s2 = await api.createStrategy({
-            name: "XAUUSD Divergence Causal",
-            description: "Strictly causal regular divergence with ATR risk management",
-            strategy_type: "divergence",
-            initial_parameters: {
-              rsi_period: 14,
-              swing_window: 5,
-              entry_mode: "early_candlestick",
-              risk_per_trade_pct: 0.01,
-              risk_reward_ratio: 2.0,
-              sl_buffer_atr: 0.2,
-              oversold_threshold: 35.0,
-              overbought_threshold: 65.0,
-              max_bars_held: 72,
-            },
-          });
-          strats = [s1, s2];
+        try {
+          let strats = await api.listStrategies();
+          if (strats.length === 0) {
+            // Create initial baseline strategies
+            const s1 = await api.createStrategy({
+              name: "Gold RSI Mean Reversion",
+              description: "Institutional 1H mean-reversion with volatility stops",
+              strategy_type: "rsi",
+              initial_parameters: {
+                rsi_period: 14,
+                oversold: 30.0,
+                overbought: 70.0,
+                risk_per_trade_pct: 0.01,
+                risk_reward_ratio: 2.0,
+                sl_atr_mult: 1.5,
+                max_bars_held: 48,
+              },
+            });
+            const s2 = await api.createStrategy({
+              name: "XAUUSD Divergence Causal",
+              description: "Strictly causal regular divergence with ATR risk management",
+              strategy_type: "divergence",
+              initial_parameters: {
+                rsi_period: 14,
+                swing_window: 5,
+                entry_mode: "early_candlestick",
+                risk_per_trade_pct: 0.01,
+                risk_reward_ratio: 2.0,
+                sl_buffer_atr: 0.2,
+                oversold_threshold: 35.0,
+                overbought_threshold: 65.0,
+                max_bars_held: 72,
+              },
+            });
+            strats = [s1, s2];
+          }
+
+          setStrategies(strats);
+          setSelectedStrategy(strats[0]);
+        } catch (stratErr) {
+          console.warn("Could not load strategies:", stratErr);
         }
 
-        setStrategies(strats);
-        setSelectedStrategy(strats[0]);
-
-        // Load OHLCV bars for gold
-        const barData = await api.getBars("XAUUSD", "1H", 300);
-        setBars(barData);
+        // Refresh live bars from backend now that auth/connection is established
+        try {
+          const liveBars = await api.getBars("XAUUSD", "1H", 300);
+          if (liveBars && liveBars.length > 0) {
+            setBars(liveBars);
+          }
+        } catch (bErr) {
+          console.warn("Could not fetch live bars:", bErr);
+        }
 
         // Check if there are past runs to display tearsheet
-        const runs = await api.listRuns();
-        const completed = runs.find((r) => r.status === "COMPLETED");
-        if (completed) {
-          const ts = await api.getTearsheet(completed.id);
-          setActiveTearsheet(ts);
-          if (ts.run?.symbol && ts.run?.timeframe && (ts.run.symbol !== "XAUUSD" || ts.run.timeframe !== "1H")) {
-            const runBars = await api.getBars(ts.run.symbol, ts.run.timeframe, 300);
-            if (runBars && runBars.length > 0) {
-              setBars(runBars);
+        try {
+          const runs = await api.listRuns();
+          const completed = runs.find((r) => r.status === "COMPLETED");
+          if (completed) {
+            const ts = await api.getTearsheet(completed.id);
+            setActiveTearsheet(ts);
+            if (ts.run?.symbol && ts.run?.timeframe && (ts.run.symbol !== "XAUUSD" || ts.run.timeframe !== "1H")) {
+              const runBars = await api.getBars(ts.run.symbol, ts.run.timeframe, 300);
+              if (runBars && runBars.length > 0) {
+                setBars(runBars);
+              }
             }
           }
+        } catch (runErr) {
+          console.warn("Could not load past runs:", runErr);
         }
       } catch (err) {
         console.warn("API initialization note:", err);
