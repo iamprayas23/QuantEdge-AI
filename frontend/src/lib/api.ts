@@ -126,9 +126,27 @@ export const api = {
 
   getEquityCurve: (runId: string) => request<EquityPoint[]>(`/backtests/${runId}/equity`),
 
-  // Market Data
-  getBars: (symbol = "XAUUSD", timeframe = "1H", limit = 300) =>
-    request<OHLCVBar[]>(`/data/bars?symbol=${symbol}&timeframe=${timeframe}&limit=${limit}`),
+  // Market Data & Real-Time TradingView Feeds
+  getBars: (symbol = "XAUUSD", timeframe = "30M", limit = 300, refresh = false) =>
+    request<OHLCVBar[]>(`/data/bars?symbol=${symbol}&timeframe=${timeframe}&limit=${limit}&refresh=${refresh}`),
+
+  getWatchlist: () =>
+    request<Array<{
+      symbol: string;
+      name: string;
+      category: string;
+      exchange: string;
+      price: number;
+      change: number;
+      change_pct: number;
+      high: number;
+      low: number;
+      volume: number;
+      is_positive: boolean;
+    }>>("/data/watchlist"),
+
+  getSymbolInfo: (symbol: string) =>
+    request<{ symbol: string; name: string; category: string; exchange: string; digits: number }>(`/data/info/${symbol}`),
 
   // Grounded AI
   parseHypothesis: (prompt: string) =>

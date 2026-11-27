@@ -45,14 +45,47 @@ export default function QuantEdgeApp() {
   const [workspaceName, setWorkspaceName] = useState<string>("Alpha Core Workspace");
   const [appliedParams, setAppliedParams] = useState<Record<string, any> | null>(null);
   const [activePillarTab, setActivePillarTab] = useState<"committee" | "walk_forward" | "guardrails" | "catalysts" | "planner">("committee");
+  const [activeSymbol, setActiveSymbol] = useState<string>("XAUUSD");
+  const [activeTimeframe, setActiveTimeframe] = useState<string>("30m");
+  const [isBarsLoading, setIsBarsLoading] = useState<boolean>(false);
+
+  const handleSymbolChange = async (newSym: string) => {
+    setActiveSymbol(newSym);
+    setIsBarsLoading(true);
+    try {
+      const data = await api.getBars(newSym, activeTimeframe, 300, true);
+      if (data && data.length > 0) {
+        setBars(data);
+      }
+    } catch (err) {
+      console.warn("Could not load bars for symbol:", newSym, err);
+    } finally {
+      setIsBarsLoading(false);
+    }
+  };
+
+  const handleTimeframeChange = async (newTf: string) => {
+    setActiveTimeframe(newTf);
+    setIsBarsLoading(true);
+    try {
+      const data = await api.getBars(activeSymbol, newTf, 300, true);
+      if (data && data.length > 0) {
+        setBars(data);
+      }
+    } catch (err) {
+      console.warn("Could not load bars for timeframe:", newTf, err);
+    } finally {
+      setIsBarsLoading(false);
+    }
+  };
 
   // Initialize session & load initial data
-  // 1. Immediately fetch market data on mount with instant fallback
+  // 1. Immediately fetch real-time market data on mount
   useEffect(() => {
     let isMounted = true;
     const loadMarketData = async () => {
       try {
-        const barData = await api.getBars("XAUUSD", "1H", 300);
+        const barData = await api.getBars(activeSymbol, activeTimeframe, 300, true);
         if (isMounted && barData && barData.length > 0) {
           setBars(barData);
           return;
@@ -61,18 +94,18 @@ export default function QuantEdgeApp() {
         console.warn("Backend not yet reachable on port 8000; applying instant seed fallback:", err);
       }
 
-      // Instant fallback so chart canvas renders immediately
+      // Instant fallback anchored to current live gold prices (~$3,674)
       if (isMounted) {
         const now = Math.floor(Date.now() / 1000);
         const fallback: OHLCVBar[] = [];
-        let curr = 2025.0;
+        let curr = 3674.39;
         for (let i = 200; i >= 0; i--) {
-          const time = now - i * 3600;
-          const delta = Math.sin(i / 6.0) * 3.5 + ((i % 3) - 1) * 1.5;
+          const time = now - i * 1800;
+          const delta = Math.sin(i / 6.0) * 4.5 + ((i % 3) - 1) * 2.2;
           const open = curr;
           const close = open + delta;
-          const high = Math.max(open, close) + Math.abs(Math.cos(i / 4.0)) * 2.0;
-          const low = Math.min(open, close) - Math.abs(Math.sin(i / 4.0)) * 2.0;
+          const high = Math.max(open, close) + Math.abs(Math.cos(i / 4.0)) * 3.0;
+          const low = Math.min(open, close) - Math.abs(Math.sin(i / 4.0)) * 3.0;
           fallback.push({
             time,
             open: parseFloat(open.toFixed(2)),
@@ -314,7 +347,7 @@ export default function QuantEdgeApp() {
 
           <div className="hidden md:flex items-center space-x-2 border-l border-surfaceBorder pl-3 text-xs font-mono text-gray-400">
             <Database className="w-3.5 h-3.5 text-accent" />
-            <span>Feed: XAUUSD (1H UTC)</span>
+            <span>Feed: {activeSymbol} ({activeTimeframe.toUpperCase()} Live Yahoo Finance)</span>
           </div>
         </div>
 
@@ -339,16 +372,24 @@ export default function QuantEdgeApp() {
           initialCapital={activeTearsheet?.run?.initial_capital || 10000}
         />
 
-        {/* Charts & Tearsheet Grid */}
+        {/* Full-Width TradingView Terminal with Real-Time Feed & Watchlist */}
+        <div className="w-full">
+          <CandlestickChart
+            bars={bars}
+            trades={activeTearsheet?.recent_trades || []}
+            symbol={activeSymbol}
+            timeframe={activeTimeframe}
+            onSymbolChange={handleSymbolChange}
+            onTimeframeChange={handleTimeframeChange}
+            onRefresh={() => handleSymbolChange(activeSymbol)}
+            isLoading={isBarsLoading}
+          />
+        </div>
+
+        {/* Analytics, Tearsheet & Strategy Controls */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          {/* Left 2 Cols: Candlestick & Equity Curves */}
-          <div className="lg:col-span-2 space-y-4">
-            <CandlestickChart
-              bars={bars}
-              trades={activeTearsheet?.recent_trades || []}
-              symbol="XAUUSD"
-              timeframe="1H"
-            />
+          {/* Left 2 Cols: Equity Curves */}
+          <div className="lg:col-span-2">
             <EquityChart
               equityCurve={activeTearsheet?.equity_curve || []}
               initialCapital={activeTearsheet?.run?.initial_capital || 10000}

@@ -162,7 +162,7 @@ def ingest_file_or_dir(
 
 def main():
     parser = argparse.ArgumentParser(description="QuantEdge Market Data Ingestor")
-    parser.add_argument("--source", type=str, default="data/XAUUSD_1H_merged.csv", help="Path to CSV, glob, or dir")
+    parser.add_argument("--source", type=str, default="data/xauusd_raw", help="Path to CSV, glob, or dir")
     parser.add_argument("--symbol", type=str, default="XAUUSD", help="Ticker symbol")
     parser.add_argument("--timeframe", type=str, default="1H", help="Timeframe (1H, 1D, etc.)")
     parser.add_argument("--export-parquet", type=str, default="data/XAUUSD_1H.parquet", help="Optional Parquet dump destination")

@@ -106,10 +106,22 @@ def execute_backtest_job(run_id: UUID, req_params: Dict[str, Any]):
             ]
             df = pd.DataFrame(data_records)
         else:
-            # Fallback to local CSV
-            csv_path = Path("data/XAUUSD_1H_merged.csv")
-            if csv_path.exists():
-                df = load_and_normalize_ohlcv(csv_path)
+            # Fallback to live provider
+            from core.data.yfinance_loader import get_or_fetch_ohlcv_bars
+            from datetime import timezone
+            bars = get_or_fetch_ohlcv_bars(db, symbol=run.symbol, timeframe=run.timeframe, limit=500)
+            if bars:
+                df = pd.DataFrame([
+                    {
+                        "timestamp": datetime.fromtimestamp(b["time"], tz=timezone.utc),
+                        "open": b["open"],
+                        "high": b["high"],
+                        "low": b["low"],
+                        "close": b["close"],
+                        "volume": b["volume"],
+                    }
+                    for b in bars
+                ])
 
         if df is None or len(df) < 50:
             run.status = "FAILED"

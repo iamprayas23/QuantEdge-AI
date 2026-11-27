@@ -106,13 +106,21 @@ def _fetch_bars_df(db: Session, symbol: str, timeframe: str, limit: int = 600) -
             for b in bars_sorted
         ])
     try:
-        from pathlib import Path
-        csv_p = Path("data/XAUUSD_1H_merged.csv")
-        if csv_p.exists():
-            df = load_and_normalize_ohlcv(csv_p)
-            if len(df) > limit:
-                df = df.iloc[-limit:].reset_index(drop=True)
-            return df
+        from core.data.yfinance_loader import get_or_fetch_ohlcv_bars
+        from datetime import timezone
+        live_bars = get_or_fetch_ohlcv_bars(db, symbol=symbol, timeframe=timeframe, limit=limit)
+        if live_bars and len(live_bars) >= 10:
+            return pd.DataFrame([
+                {
+                    "timestamp": datetime.fromtimestamp(b["time"], tz=timezone.utc),
+                    "open": b["open"],
+                    "high": b["high"],
+                    "low": b["low"],
+                    "close": b["close"],
+                    "volume": b["volume"],
+                }
+                for b in live_bars
+            ])
     except Exception:
         pass
 

@@ -176,16 +176,25 @@ def convene_committee_review(
             for b in bars_sorted
         ])
     else:
-        # Fallback to local merged CSV if database bars are sparse
+        # Fetch from live market data provider
         try:
-            from pathlib import Path
-            csv_path = Path("data/XAUUSD_1H_merged.csv")
-            if csv_path.exists():
-                df = load_and_normalize_ohlcv(csv_path)
-                if len(df) > payload.limit_bars:
-                    df = df.iloc[-payload.limit_bars:].reset_index(drop=True)
+            from core.data.yfinance_loader import get_or_fetch_ohlcv_bars
+            from datetime import timezone
+            live_bars = get_or_fetch_ohlcv_bars(db, symbol=payload.symbol, timeframe=payload.timeframe, limit=payload.limit_bars)
+            if live_bars and len(live_bars) >= 10:
+                df = pd.DataFrame([
+                    {
+                        "timestamp": datetime.fromtimestamp(b["time"], tz=timezone.utc),
+                        "open": b["open"],
+                        "high": b["high"],
+                        "low": b["low"],
+                        "close": b["close"],
+                        "volume": b["volume"],
+                    }
+                    for b in live_bars
+                ])
             else:
-                raise FileNotFoundError()
+                raise ValueError("Insufficient live bars")
         except Exception:
             # Deterministic synthetic test fixture if no files exist
             dates = pd.date_range("2024-01-01", periods=100, freq="h")
