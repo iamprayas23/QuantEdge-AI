@@ -1,14 +1,10 @@
 """Market Data Router for Charting & Ingestion"""
 from typing import List, Optional
-from datetime import datetime
-from pathlib import Path
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
 
 from infrastructure.database.connection import get_db
-from infrastructure.database.models import OHLCVBar
-from core.backtesting.data_loader import load_and_normalize_ohlcv
+from core.data.yfinance_loader import get_or_fetch_ohlcv_bars
 
 router = APIRouter(prefix="/data", tags=["Market Data"])
 
@@ -22,43 +18,14 @@ def get_ohlcv_bars(
 ):
     """
     Fetch historical OHLCV bars formatted for Lightweight Charts.
+    1. Checks PostgreSQL/SQLite ohlcv_bars cache.
+    2. Fetches via yfinance if missing or insufficient.
+    3. Idempotently caches bars into database.
+    4. Provides deterministic fallback to CSV/synthetic bars on network disconnect.
     """
-    bars = (
-        db.query(OHLCVBar)
-        .filter(OHLCVBar.symbol == symbol, OHLCVBar.timeframe == timeframe)
-        .order_by(OHLCVBar.ts_utc.desc())
-        .limit(limit)
-        .all()
+    return get_or_fetch_ohlcv_bars(
+        db=db,
+        symbol=symbol,
+        timeframe=timeframe,
+        limit=limit,
     )
-
-    if bars:
-        bars = list(reversed(bars))
-        return [
-            {
-                "time": int(b.ts_utc.timestamp()),
-                "open": b.open,
-                "high": b.high,
-                "low": b.low,
-                "close": b.close,
-                "volume": b.volume,
-            }
-            for b in bars
-        ]
-
-    # Fallback to local CSV if DB not ingested yet
-    csv_file = Path("data/XAUUSD_1H_merged.csv")
-    if csv_file.exists():
-        df = load_and_normalize_ohlcv(csv_file).tail(limit)
-        return [
-            {
-                "time": int(row["timestamp"].timestamp()),
-                "open": float(row["open"]),
-                "high": float(row["high"]),
-                "low": float(row["low"]),
-                "close": float(row["close"]),
-                "volume": float(row["volume"]),
-            }
-            for _, row in df.iterrows()
-        ]
-
-    return []

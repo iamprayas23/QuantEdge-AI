@@ -3,6 +3,7 @@ import os
 import sys
 import time
 import unittest
+from unittest.mock import patch, MagicMock
 from datetime import datetime, timezone, timedelta
 import pandas as pd
 import numpy as np
@@ -14,6 +15,7 @@ sys.path.insert(0, os.path.abspath("."))
 
 from infrastructure.database.models import (
     Base,
+    OHLCVBar,
     CommitteeReport,
     MarketCatalyst,
     RiskRuleProfileModel,
@@ -102,6 +104,17 @@ import api_platform.ai.router as ai_router
 import api_platform.research.router as research_router
 import api_platform.risk.router as risk_router
 import api_platform.finance.router as finance_router
+import api_platform.data.router as data_router
+from core.data.yfinance_loader import (
+    map_symbol,
+    map_timeframe,
+    flatten_yfinance_columns,
+    clean_and_normalize_df,
+    fetch_yfinance_ohlcv,
+    generate_deterministic_fallback_bars,
+    upsert_ohlcv_bars,
+    get_or_fetch_ohlcv_bars,
+)
 import api_platform.strategies.service as strat_service
 import api_platform.backtests.schemas as bt_schemas
 import api_platform.backtests.service as bt_service
@@ -844,6 +857,161 @@ class TestFinanceAndTradingPillars(unittest.TestCase):
         )
         self.assertIsInstance(fplan, FinancialPlanOutput)
         self.assertIn(fplan.emergency_runway.health_status, ["ADEQUATE", "ROBUST"])
+
+
+class TestYFinanceAndMarketData(unittest.TestCase):
+    def setUp(self):
+        Base.metadata.create_all(bind=engine)
+        self.db = SessionLocal()
+
+    def tearDown(self):
+        self.db.close()
+
+    def test_symbol_and_timeframe_mapping(self):
+        # 1. Symbol mapping
+        self.assertIn(map_symbol("XAUUSD"), ["GC=F", "XAUUSD=X"])
+        self.assertIn(map_symbol("GOLD"), ["GC=F", "XAUUSD=X"])
+        self.assertEqual(map_symbol("BTCUSD"), "BTC-USD")
+        self.assertEqual(map_symbol("ETHUSD"), "ETH-USD")
+        self.assertEqual(map_symbol("AAPL"), "AAPL")
+        self.assertEqual(map_symbol("SOL/USD"), "SOL-USD")
+
+        # 2. Timeframe mapping
+        interval_1h, period_1h = map_timeframe("1H", limit=100)
+        self.assertEqual(interval_1h, "1h")
+        self.assertIn(period_1h, ["60d", "180d", "730d"])
+
+        interval_15m, period_15m = map_timeframe("15M", limit=100)
+        self.assertEqual(interval_15m, "15m")
+        self.assertIn(period_15m, ["14d", "60d"])
+
+        interval_1d, period_1d = map_timeframe("1D", limit=100)
+        self.assertEqual(interval_1d, "1d")
+
+    def test_multiindex_flattening_and_normalization(self):
+        # Simulate MultiIndex from yf.download: ('Price', 'Ticker')
+        cols = pd.MultiIndex.from_tuples([
+            ("Close", "GC=F"),
+            ("High", "GC=F"),
+            ("Low", "GC=F"),
+            ("Open", "GC=F"),
+            ("Volume", "GC=F"),
+        ], names=["Price", "Ticker"])
+
+        t1 = datetime(2023, 1, 1, 10, 0, tzinfo=timezone.utc)
+        t2 = datetime(2023, 1, 1, 12, 0, tzinfo=timezone.utc)
+        t3 = datetime(2023, 1, 1, 11, 0, tzinfo=timezone.utc)  # out of order
+        t4 = datetime(2023, 1, 1, 12, 0, tzinfo=timezone.utc)  # duplicate of t2
+        t5 = datetime(2023, 1, 1, 13, 0, tzinfo=timezone.utc)  # has NaN price
+
+        raw_df = pd.DataFrame(
+            [
+                [1905.0, 1910.0, 1900.0, 1902.0, 100.0],
+                [1915.0, 1920.0, 1910.0, 1912.0, 200.0],
+                [1910.0, 1912.0, 1905.0, 1908.0, 150.0],
+                [1918.0, 1922.0, 1912.0, 1915.0, 250.0],
+                [np.nan, 1925.0, 1915.0, 1920.0, 300.0],
+            ],
+            index=[t1, t2, t3, t4, t5],
+            columns=cols,
+        )
+
+        clean_df = clean_and_normalize_df(raw_df)
+
+        # 1. Columns normalized
+        expected_cols = ["timestamp", "time", "open", "high", "low", "close", "volume"]
+        self.assertEqual(list(clean_df.columns), expected_cols)
+
+        # 2. Row count: t1, t3, t4 (t2 replaced by t4 duplicate, t5 dropped due to NaN)
+        self.assertEqual(len(clean_df), 3)
+
+        # 3. Strictly ascending order: 10:00, 11:00, 12:00
+        self.assertEqual(clean_df["time"].iloc[0], int(t1.timestamp()))
+        self.assertEqual(clean_df["time"].iloc[1], int(t3.timestamp()))
+        self.assertEqual(clean_df["time"].iloc[2], int(t4.timestamp()))
+        self.assertTrue(clean_df["time"].is_monotonic_increasing)
+
+        # 4. Deduplicated: t4 replaced t2's close of 1915 with 1918
+        self.assertEqual(clean_df["close"].iloc[2], 1918.0)
+
+    def test_offline_fallback_generator(self):
+        # 1. Deterministic synthetic bars
+        synth_bars = generate_deterministic_fallback_bars(symbol="XAUUSD", timeframe="1H", count=40)
+        self.assertEqual(len(synth_bars), 40)
+        self.assertTrue(synth_bars["time"].is_monotonic_increasing)
+        self.assertGreater(synth_bars["open"].iloc[0], 1000.0)
+
+        # 2. Mock yfinance exception fallback
+        with patch("yfinance.download", side_effect=Exception("Simulated connection timeout")):
+            df = fetch_yfinance_ohlcv("GC=F", "1H", limit=20)
+            self.assertTrue(df.empty)
+
+    def test_data_bars_api_and_db_persistence(self):
+        # Request bars via data_router
+        bars = data_router.get_ohlcv_bars(symbol="XAUUSD", timeframe="1H", limit=60, db=self.db)
+        self.assertIsInstance(bars, list)
+        self.assertGreaterEqual(len(bars), 60)
+
+        first_bar = bars[0]
+        self.assertIn("time", first_bar)
+        self.assertIn("open", first_bar)
+        self.assertIn("high", first_bar)
+        self.assertIn("low", first_bar)
+        self.assertIn("close", first_bar)
+        self.assertIn("volume", first_bar)
+        self.assertIsInstance(first_bar["time"], int)
+
+        # Verify bars are saved in DB
+        db_count = (
+            self.db.query(OHLCVBar)
+            .filter(OHLCVBar.symbol == "XAUUSD", OHLCVBar.timeframe == "1H")
+            .count()
+        )
+        self.assertGreaterEqual(db_count, 60)
+
+        # Check secondary symbol with synthetic fallback caching (e.g., SOLUSD)
+        sol_bars = data_router.get_ohlcv_bars(symbol="SOLUSD", timeframe="1H", limit=30, db=self.db)
+        self.assertGreaterEqual(len(sol_bars), 30)
+        sol_db_count = (
+            self.db.query(OHLCVBar)
+            .filter(OHLCVBar.symbol == "SOLUSD", OHLCVBar.timeframe == "1H")
+            .count()
+        )
+        self.assertGreaterEqual(sol_db_count, 30)
+
+    def test_mocked_yfinance_successful_download_and_cache(self):
+        # Construct mock MultiIndex yf.download result for ETHUSD
+        cols = pd.MultiIndex.from_tuples([
+            ("Close", "ETH-USD"),
+            ("High", "ETH-USD"),
+            ("Low", "ETH-USD"),
+            ("Open", "ETH-USD"),
+            ("Volume", "ETH-USD"),
+        ], names=["Price", "Ticker"])
+
+        t0 = datetime(2023, 5, 1, 0, 0, tzinfo=timezone.utc)
+        timestamps = [t0 + timedelta(hours=i) for i in range(25)]
+        rows = [
+            [3000.0 + i * 5.0, 3010.0 + i * 5.0, 2990.0 + i * 5.0, 3002.0 + i * 5.0, 1000.0 + i * 10]
+            for i in range(25)
+        ]
+        mock_df = pd.DataFrame(rows, index=timestamps, columns=cols)
+
+        with patch("yfinance.download", return_value=mock_df) as mock_yf:
+            bars = data_router.get_ohlcv_bars(symbol="ETHUSD", timeframe="1H", limit=25, db=self.db)
+            self.assertEqual(len(bars), 25)
+            self.assertEqual(bars[0]["open"], 3002.0)
+            self.assertEqual(bars[-1]["close"], 3000.0 + 24 * 5.0)
+
+            # Verify persisted in database
+            db_bars = (
+                self.db.query(OHLCVBar)
+                .filter(OHLCVBar.symbol == "ETHUSD", OHLCVBar.timeframe == "1H")
+                .all()
+            )
+            self.assertEqual(len(db_bars), 25)
+            self.assertEqual(db_bars[0].source, "yfinance")
+            mock_yf.assert_called_once()
 
 
 if __name__ == "__main__":

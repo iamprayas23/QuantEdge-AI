@@ -120,6 +120,12 @@ export default function QuantEdgeApp() {
         if (completed) {
           const ts = await api.getTearsheet(completed.id);
           setActiveTearsheet(ts);
+          if (ts.run?.symbol && ts.run?.timeframe && (ts.run.symbol !== "XAUUSD" || ts.run.timeframe !== "1H")) {
+            const runBars = await api.getBars(ts.run.symbol, ts.run.timeframe, 300);
+            if (runBars && runBars.length > 0) {
+              setBars(runBars);
+            }
+          }
         }
       } catch (err) {
         console.warn("API initialization note:", err);
@@ -162,6 +168,14 @@ export default function QuantEdgeApp() {
             setIsExecuting(false);
             const tearsheet = await api.getTearsheet(job.job_id);
             setActiveTearsheet(tearsheet);
+            try {
+              const runBars = await api.getBars(launchConfig.symbol, launchConfig.timeframe, 300);
+              if (runBars && runBars.length > 0) {
+                setBars(runBars);
+              }
+            } catch (barErr) {
+              console.warn("Failed to update chart bars after run:", barErr);
+            }
           } else if (statusRes.status === "FAILED") {
             clearInterval(pollInterval);
             setIsExecuting(false);
